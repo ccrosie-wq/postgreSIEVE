@@ -9,12 +9,13 @@ src/backend/storage/tracking/atomic_tracking_stats.h
 
 */
 
-#ifndef AtomicStats_H;
-#define AtomicStats_H;
+#ifndef AtomicStats_H
+#define AtomicStats_H
 
+#include "postgres.h"
+#include "c.h"
+#include "port/atomics.h"
 
-#include "c.h";
-#include "port/atomics.h";
 
 
 typedef struct AtomicStats
@@ -30,10 +31,19 @@ typedef struct AtomicStats
 
 extern AtomicStats *AtomicStatsPointer;
 
-extern void GenerateAtomicCacheHitRatio(void);
-extern void GenerateAtomicThroughputNum(void);
-extern void GenerateAtomicLatencyNum(void);
-extern void GenerateAtomicStats(void);
+/*
+* APIs to be called by the internals
+*/
+
+extern void RecordAtomicCacheHitRatio(void);
+extern void RecordAtomicLatencyNum(void);
+
+
+/*
+* APIs to be called by the SQL queries to provide the final output
+*/
+extern void GenAtomicThroughputNum(void);
+extern void GenAtomicStats(void);
 
 
 
