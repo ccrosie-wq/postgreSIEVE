@@ -4,11 +4,12 @@
 \set nbranches	1
 \set ntellers	10
 \set naccounts	100000
+\set alpha 1.5
 
 -- Transaction Variables
-\set aid random_zipfian(1, :naccounts * :scale, 1.5) -- last parameter is alpha in zipfian distribution
-\set bid random_zipfian(1, :nbranches * :scale, 1.5)
-\set tid random_zipfian(1, :ntellers * :scale, 1.5)
+\set aid random_zipfian(1, :naccounts * :scale, :alpha)
+\set bid random_zipfian(1, :nbranches * :scale, :alpha)
+\set tid random_zipfian(1, :ntellers * :scale, :alpha)
 \set delta random(-5000, 5000)
 
 -- Execute Transaction (same as the built-in simple-update)
