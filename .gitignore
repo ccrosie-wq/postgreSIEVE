@@ -44,4 +44,6 @@ lib*.pc
 /tmp_install/
 /portlock/
 
+# Custom
 **logfile
+benchmark/outputs

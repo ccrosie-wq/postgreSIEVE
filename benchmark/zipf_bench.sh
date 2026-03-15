@@ -32,4 +32,5 @@ alp=$alpha awk '/\\set alpha/ {$0="\\set alpha "ENVIRON["alp"]""; print; next} {
 chmod -R g+rwx pgscripts/* # ensure permissions are retained so users can still read the file
 
 # run the benchmark
-pgbench -s ${SCALE_FACTOR} -T "${time}" -f pgscripts/zipfian_select.sql@"${read_weight}" -f pgscripts/zipfian_update.sql@"${update_weight}"
+bench_file=outputs/$(date -Iseconds)
+pgbench -s ${SCALE_FACTOR} -T "${time}" -f pgscripts/zipfian_select.sql@"${read_weight}" -f pgscripts/zipfian_update.sql@"${update_weight}" >> "$bench_file"
