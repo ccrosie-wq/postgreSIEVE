@@ -27,10 +27,9 @@ done
 
 # apply alpha
 tmp=$(mktemp)
-awk '/\\set alpha/ {$0="\\set alpha $alpha"; print; next} {print}' pgscripts/zipfan_select.sql > tmp && mv tmp pgscripts/zipfan_select.sql
-tmp=$(mktemp)
-awk '/\\set alpha/ {$0="\\set alpha $alpha"; print; next} {print}' pgscripts/zipfan_update.sql > tmp && mv tmp pgscripts/zipfan_update.sql
-
+alp=$alpha awk '/\\set alpha/ {$0="\\set alpha "ENVIRON["alp"]""; print; next} {print}' pgscripts/zipfian_select.sql > "$tmp" && mv "$tmp" pgscripts/zipfian_select.sql
+alp=$alpha awk '/\\set alpha/ {$0="\\set alpha "ENVIRON["alp"]""; print; next} {print}' pgscripts/zipfian_update.sql > "$tmp" && mv "$tmp" pgscripts/zipfian_update.sql
+chmod -R g+rwx pgscripts/* # ensure permissions are retained so users can still read the file
 
 # run the benchmark
 pgbench -s ${SCALE_FACTOR} -T "${time}" -f pgscripts/zipfian_select.sql@"${read_weight}" -f pgscripts/zipfian_update.sql@"${update_weight}"

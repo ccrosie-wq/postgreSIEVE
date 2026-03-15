@@ -4,9 +4,10 @@
 \set nbranches	1
 \set ntellers	10
 \set naccounts	100000
+\set alpha 1.5
 
 -- Transaction Variables
-\set aid random_zipfian(1, :naccounts * :scale, 1.5)
+\set aid random_zipfian(1, :naccounts * :scale, :alpha)
 
 -- Execute Transaction (same as built-in simple-update)
 BEGIN;
