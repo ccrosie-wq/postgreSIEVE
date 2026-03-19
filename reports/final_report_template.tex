@@ -1,0 +1,140 @@
+\documentclass[sigconf]{acmart}
+% ===== Don't touch this :) ======
+\settopmatter{printacmref=false} % Removes citation information below abstract
+\renewcommand\footnotetextcopyrightpermission[1]{} % removes footnote with conference information in first column
+\renewcommand\footnotetextauthorsaddresses[1]{}
+\pagestyle{plain} % removes running headers
+% ================================
+
+\usepackage{graphicx}
+
+
+\begin{document}
+\title{CS561 : Data Systems Architectures, a Template}
+
+\author{Andy Huynh}
+\affiliation{%
+    \institution{Boston University}
+}
+\author{Juhyoung Mun}
+\affiliation{%
+    \institution{Boston University}
+}
+\author{Manos Athanassoulis}
+\affiliation{%
+    \institution{Boston University}
+}
+
+\begin{abstract}
+    Abstract here! 
+\end{abstract}
+
+\maketitle
+
+% =============================================================================
+\section{Introduction}
+% =============================================================================
+
+\subsection{Motivation}
+
+Every paper always comes with a motivation. Explain why this research is of interest
+to the community.
+
+\subsection{Problem Statement}
+
+You \textbf{must} define your problem statement. This can be boiled down to a 
+question you are answering or concept you are exploring. You don't need to go into
+the nitty gritty details of your problem like variable definitions, but this is a
+bit higher level.
+
+\subsection{Contributions}
+
+Give your reader a small summary of what exactly you 
+
+You been reviewing a lot of papers this semester, take a look at what separated
+the good ones from the great ones and analyze what how they introduced their
+problem.
+
+
+% =============================================================================
+\section{Background}
+% =============================================================================
+Recommended work belong here! Would highly suggest you add any time of relevant
+background information pertaining to your project (e.g. previous research)
+
+If you need to explain with equations, \ref{eq:bf_fp} is an example of false positive 
+rate of a Bloom filter~\cite{Bloom}.
+\begin{equation}
+    f_p = \Big(1-\Big(1-\frac{1}{m}\Big)^{kn}\Big)^{k} \approx \Big(1-e^{kn/m} \Big)^{k}
+    \label{eq:bf_fp}
+ \end{equation}
+
+% =============================================================================
+\section{Architecture}
+% =============================================================================
+This is where your papers will differ depending on what type of project you
+have. At this point everything is extremely flexible and depends on how you
+want to structure your paper.
+
+\subsection{TemplateDB}
+
+An example is the LSM project, generally you would want to start explaining
+your system architecture here. Additional features may also belong here. If
+you're benchmarking RocksDB you may end up explaining some of the experimental
+set ups (assuming you've defined the problem at hand!)
+
+
+\subsection{Solution Design}
+
+Maybe you're doing a research project that tackles on a particular problem. You
+may want to start introducing a design solution here that explains how you will
+tackle said problem.
+
+\subsection{Benchmark Explanations}
+
+If you're doing some sort of quantitative analysis you may want your math to 
+start being defined and analyzed here.
+
+
+% =============================================================================
+\section{Results}
+% =============================================================================
+Graphs are basically a requirement here!
+
+\begin{figure}[ht]
+    \includegraphics[width=3cm]{example-image-a}
+    \caption{Example figure here}
+    \label{fig:filler}
+\end{figure}
+
+\begin{table}[H]
+    \caption{An example table}
+	\label{tab:ex}
+	\centering
+
+	\begin{tabular}{c |c c c c c}
+        \hline\hline
+        & Col A & Col B \\
+        \hline
+        Row A & val 1 & val a \\
+        Row B & val 2 & val b \\
+        Row C & val 3 & val c \\
+	\hline
+	\end{tabular}
+\end{table}
+
+You can also reference your old figures (Figure \ref{fig:filler}) and tables 
+(Table \ref{tab:ex})
+% =============================================================================
+\section{Conclusion}
+% =============================================================================
+
+Final thoughts here.
+
+% reference
+{
+    \bibliographystyle{ACM-Reference-Format}
+    \bibliography{biblio}
+} 
+
+\end{document}
