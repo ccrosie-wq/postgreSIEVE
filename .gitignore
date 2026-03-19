@@ -43,3 +43,10 @@ lib*.pc
 /Release/
 /tmp_install/
 /portlock/
+
+reports/final/*
+reports/midway/*
+!reports/final/biblio.bib
+!reports/midway/biblio.bib
+!reports/final/final_report_template.tex
+!reports/midway/final_report_template.tex
