@@ -1,0 +1,56 @@
+2026-02-27 15:09:51.099 EST [42606] LOG:  starting PostgreSQL 19devel on aarch64-apple-darwin25.3.0, compiled by Apple clang version 17.0.0 (clang-1700.6.3.2), 64-bit
+2026-02-27 15:09:51.100 EST [42606] LOG:  could not bind IPv6 address "::1": Address already in use
+2026-02-27 15:09:51.100 EST [42606] HINT:  Is another postmaster already running on port 5432? If not, wait a few seconds and retry.
+2026-02-27 15:09:51.100 EST [42606] LOG:  could not bind IPv4 address "127.0.0.1": Address already in use
+2026-02-27 15:09:51.100 EST [42606] HINT:  Is another postmaster already running on port 5432? If not, wait a few seconds and retry.
+2026-02-27 15:09:51.100 EST [42606] WARNING:  could not create listen socket for "localhost"
+2026-02-27 15:09:51.100 EST [42606] FATAL:  could not create any TCP/IP sockets
+2026-02-27 15:09:51.100 EST [42606] LOG:  database system is shut down
+2026-02-27 15:10:08.351 EST [42751] LOG:  starting PostgreSQL 19devel on aarch64-apple-darwin25.3.0, compiled by Apple clang version 17.0.0 (clang-1700.6.3.2), 64-bit
+2026-02-27 15:10:08.352 EST [42751] LOG:  could not bind IPv6 address "::1": Address already in use
+2026-02-27 15:10:08.352 EST [42751] HINT:  Is another postmaster already running on port 5432? If not, wait a few seconds and retry.
+2026-02-27 15:10:08.352 EST [42751] LOG:  could not bind IPv4 address "127.0.0.1": Address already in use
+2026-02-27 15:10:08.352 EST [42751] HINT:  Is another postmaster already running on port 5432? If not, wait a few seconds and retry.
+2026-02-27 15:10:08.352 EST [42751] WARNING:  could not create listen socket for "localhost"
+2026-02-27 15:10:08.352 EST [42751] FATAL:  could not create any TCP/IP sockets
+2026-02-27 15:10:08.352 EST [42751] LOG:  database system is shut down
+2026-02-27 15:10:43.240 EST [43026] LOG:  starting PostgreSQL 19devel on aarch64-apple-darwin25.3.0, compiled by Apple clang version 17.0.0 (clang-1700.6.3.2), 64-bit
+2026-02-27 15:10:43.241 EST [43026] LOG:  could not bind IPv6 address "::1": Address already in use
+2026-02-27 15:10:43.241 EST [43026] HINT:  Is another postmaster already running on port 5432? If not, wait a few seconds and retry.
+2026-02-27 15:10:43.241 EST [43026] LOG:  could not bind IPv4 address "127.0.0.1": Address already in use
+2026-02-27 15:10:43.241 EST [43026] HINT:  Is another postmaster already running on port 5432? If not, wait a few seconds and retry.
+2026-02-27 15:10:43.241 EST [43026] WARNING:  could not create listen socket for "localhost"
+2026-02-27 15:10:43.241 EST [43026] FATAL:  could not create any TCP/IP sockets
+2026-02-27 15:10:43.241 EST [43026] LOG:  database system is shut down
+2026-02-27 15:18:49.105 EST [43694] LOG:  starting PostgreSQL 19devel on aarch64-apple-darwin25.3.0, compiled by Apple clang version 17.0.0 (clang-1700.6.3.2), 64-bit
+2026-02-27 15:18:49.106 EST [43694] LOG:  could not bind IPv6 address "::1": Address already in use
+2026-02-27 15:18:49.106 EST [43694] HINT:  Is another postmaster already running on port 5432? If not, wait a few seconds and retry.
+2026-02-27 15:18:49.106 EST [43694] LOG:  could not bind IPv4 address "127.0.0.1": Address already in use
+2026-02-27 15:18:49.106 EST [43694] HINT:  Is another postmaster already running on port 5432? If not, wait a few seconds and retry.
+2026-02-27 15:18:49.106 EST [43694] WARNING:  could not create listen socket for "localhost"
+2026-02-27 15:18:49.106 EST [43694] FATAL:  could not create any TCP/IP sockets
+2026-02-27 15:18:49.106 EST [43694] LOG:  database system is shut down
+2026-02-27 15:21:20.068 EST [44334] LOG:  starting PostgreSQL 19devel on aarch64-apple-darwin25.3.0, compiled by Apple clang version 17.0.0 (clang-1700.6.3.2), 64-bit
+2026-02-27 15:21:20.069 EST [44334] LOG:  listening on IPv6 address "::1", port 5433
+2026-02-27 15:21:20.069 EST [44334] LOG:  listening on IPv4 address "127.0.0.1", port 5433
+2026-02-27 15:21:20.070 EST [44334] LOG:  listening on Unix socket "/tmp/.s.PGSQL.5433"
+2026-02-27 15:21:20.076 EST [44340] LOG:  database system was shut down at 2026-02-27 15:09:33 EST
+2026-02-27 15:21:20.078 EST [44334] LOG:  database system is ready to accept connections
+2026-02-27 15:24:18.890 EST [44673] FATAL:  database "test" does not exist
+2026-02-27 15:25:37.466 EST [45207] FATAL:  database "test" does not exist
+2026-02-27 15:26:20.079 EST [44338] LOG:  checkpoint starting: time
+2026-02-27 15:26:24.547 EST [44338] LOG:  checkpoint complete: time: wrote 44 buffers (0.3%), wrote 3 SLRU buffers; 0 WAL file(s) added, 0 removed, 0 recycled; write=4.462 s, sync=0.002 s, total=4.468 s; sync files=11, longest=0.001 s, average=0.001 s; distance=327 kB, estimate=327 kB; lsn=0/01768C90, redo lsn=0/01768C38
+2026-02-27 15:26:50.913 EST [45417] ERROR:  relation "test" does not exist at character 15
+2026-02-27 15:26:50.913 EST [45417] STATEMENT:  select * from test
+	;
+2026-02-27 15:27:08.614 EST [45417] ERROR:  syntax error at or near ";" at character 32
+2026-02-27 15:27:08.614 EST [45417] STATEMENT:  create table if not exists test;
+2026-02-27 15:30:50.049 EST [45417] ERROR:  syntax error at or near "select" at character 33
+2026-02-27 15:30:50.049 EST [45417] STATEMENT:  create table if not exists test
+	select * from test
+	;
+2026-02-27 15:31:05.622 EST [45417] ERROR:  relation "test" does not exist at character 15
+2026-02-27 15:31:05.622 EST [45417] STATEMENT:  SELECT * FROM test
+	;
+2026-02-27 15:34:21.174 EST [44338] LOG:  checkpoint starting: time
+2026-02-27 15:35:55.726 EST [44338] LOG:  checkpoint complete: time: wrote 933 buffers (5.7%), wrote 1 SLRU buffers; 0 WAL file(s) added, 0 removed, 0 recycled; write=94.539 s, sync=0.010 s, total=94.552 s; sync files=302, longest=0.001 s, average=0.001 s; distance=4244 kB, estimate=4244 kB; lsn=0/01B8DF08, redo lsn=0/01B8DE78

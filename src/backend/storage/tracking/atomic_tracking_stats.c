@@ -16,25 +16,25 @@
 AtomicStats *AtomicStatsPointer = NULL;
 
 void 
-GenerateAtomicCacheHitRatio(void)
+RecordAtomicCacheHitRatio(void)
 {
     // Implement the logic to calculate and update the cache hit ratio using atomic_cache_hits and atomic_cache_misses
 };
 
 void 
-GenerateAtomicThroughputNum(void)
+RecordAtomicThroughputNum(void)
 {
     // Implement the logic to calculate and update the throughput number using atomic_throughput
 };
 
 void 
-GenerateAtomicLatencyNum(void)
+GenAtomicLatencyNum(void)
 {
     // Implement the logic to calculate and update the latency number using atomic_latency
 };
 
 void 
-GenerateAtomicStats(void)
+GenAtomicStats(void)
 {
     // Implement the logic that calculates each metric for cache ratio, latency, and throughput
     // Write a small sql query that returns a table of the metrics 

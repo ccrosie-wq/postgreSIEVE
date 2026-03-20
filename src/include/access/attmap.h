@@ -16,6 +16,7 @@
 
 #include "access/attnum.h"
 #include "access/tupdesc.h"
+#include "c.h"
 
 /*
  * Attribute mapping structure

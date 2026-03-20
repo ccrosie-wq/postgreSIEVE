@@ -24,7 +24,7 @@ GenerateLockingCacheRatio(void)
     // Implement the logic for calculating the cache ratio
     // First idea of how to achieve this
     // Get lock
-    // Call hook into the shared memory BufferUsage to get the hit number
+    // Call hook into the local  memory BufferUsage to get the hit number
     // Calculate ratio (somewhere in here save to a table )
     // Release lock
     // Return number
