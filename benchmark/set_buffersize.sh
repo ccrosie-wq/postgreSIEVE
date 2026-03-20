@@ -15,7 +15,7 @@ while getopts ":m:" opt; do
   esac
 done
 
-# apply alpha
+# replace buffer size in postgres configuration
 tmp=$(mktemp)
 sed "s/^\(shared_buffers =\).*/\1 ${m}MB/" $PGCONF > "$tmp"
 mv "$tmp" $PGCONF

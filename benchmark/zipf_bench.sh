@@ -22,6 +22,7 @@ while getopts ":r:u:t:a:b:" opt; do
         echo "    -u update_weight (default 1)"
         echo "    -t time (s) (default 10)"
         echo "    -a alpha (default 1.5)"
+        echo "    -b buffer_size (MB) (default 128)"
         exit 1
         ;;
   esac
