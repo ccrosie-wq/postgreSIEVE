@@ -1988,6 +1988,11 @@ AsyncReadBuffers(ReadBuffersOperation *operation, int *nblocks_progress)
 										  operation->smgr->smgr_rlocator.backend,
 										  true);
 
+		/*
+		This is where they update the block hits this gets stored
+		This get stored in the the buffer struct and is exposed to the user via pg_stat_database
+
+		*/
 		if (persistence == RELPERSISTENCE_TEMP)
 			pgBufferUsage.local_blks_hit += 1;
 		else
@@ -2057,7 +2062,10 @@ AsyncReadBuffers(ReadBuffersOperation *operation, int *nblocks_progress)
 					   io_pages, io_buffers_len);
 		pgstat_count_io_op_time(io_object, io_context, IOOP_READ,
 								io_start, 1, io_buffers_len * BLCKSZ);
-
+		/*
+		Updating the reads for the buffer alongside the block hits need to look at the buffer struct
+		
+		*/
 		if (persistence == RELPERSISTENCE_TEMP)
 			pgBufferUsage.local_blks_read += io_buffers_len;
 		else
