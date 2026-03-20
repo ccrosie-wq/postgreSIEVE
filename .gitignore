@@ -44,9 +44,15 @@ lib*.pc
 /tmp_install/
 /portlock/
 
+# Custom
+**logfile
+benchmark/outputs
+**env
+benchmark/charts
 reports/final/*
 reports/midway/*
 !reports/final/biblio.bib
 !reports/midway/biblio.bib
 !reports/final/final_report_template.tex
 !reports/midway/final_report_template.tex
+
