@@ -11,9 +11,10 @@ class ExtractFormat:
     sep: str
     idx: int
     units: str
+    display_name: str
 
 # format = (starting token of line, type of data, index of value of interest in the string (separated by " "))
-TPS = ExtractFormat("tps", float, " ", 2, "s")
+TPS = ExtractFormat("tps", float, " ", 2, "", "Transactions / Second")
 DISPLAY_STATS = [TPS]
 
 # indices of these values in the file names (split by _)
@@ -37,6 +38,7 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("input", help="location of input files")
     parser.add_argument("output", help="directory to output files to")
+    parser.add_argument("title", help="chart title")
     args = parser.parse_args()
     
     # ensure output dir exists
@@ -76,8 +78,8 @@ def main():
         # save bar chart
         plt.bar(labels, values)
         plt.xlabel('R/W Ratio')
-        plt.ylabel(f'{stat.name} ({stat.units})')
-        plt.title(f"{stat.name} over R/W Ratios")
+        plt.ylabel(f'{stat.display_name} ({stat.units})')
+        plt.title(f"{args.title} {stat.name}")
 
         # Display the chart
         plt.savefig(chart_out)
