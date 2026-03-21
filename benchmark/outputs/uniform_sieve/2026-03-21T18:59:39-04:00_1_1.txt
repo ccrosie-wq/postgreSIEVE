@@ -1,0 +1,28 @@
+pgbench (19devel)
+transaction type: multiple scripts
+scaling factor: 1000
+query mode: simple
+number of clients: 12
+number of threads: 1
+maximum number of tries: 1
+duration: 180 s
+number of transactions actually processed: 8213084
+number of failed transactions: 0 (0.000%)
+latency average = 0.263 ms
+initial connection time = 16.904 ms
+tps = 45632.329806 (without initial connection time)
+SQL script 1: pgscripts/uniform_select.sql
+ - weight: 1 (targets 50.0% of total)
+ - 4106899 transactions (50.0% of total)
+ - number of transactions actually processed: 4106899 (tps = 22818.148414)
+ - number of failed transactions: 0 (0.000%)
+ - latency average = 0.126 ms
+ - latency stddev = 0.030 ms
+SQL script 2: pgscripts/uniform_update.sql
+ - weight: 1 (targets 50.0% of total)
+ - 4106185 transactions (50.0% of total)
+ - number of transactions actually processed: 4106185 (tps = 22814.181392)
+ - number of failed transactions: 0 (0.000%)
+ - latency average = 0.385 ms
+ - latency stddev = 0.258 ms
+ratio: .997941963366948

@@ -7,22 +7,41 @@ CLIENTS="12"
 read_weight=1
 update_weight=1
 time=10
+buffer_size=128
 
-while getopts ":r:u:t:" opt; do
+while getopts ":r:u:t:b:" opt; do
   case $opt in
     u) update_weight="$OPTARG" ;;
     r) read_weight="$OPTARG" ;;
     t) time="$OPTARG" ;;
+    b) buffer_size="$OPTARG" ;;
     \?) echo "Invalid option: -$OPTARG" >&2
         echo "Usage:"
         echo "    -r read_weight (default 1)"
         echo "    -u update_weight (default 1)"
         echo "    -t time (s) (default 10)"
+        echo "    -b buffer_size (MB) (default 128)"
         exit 1
         ;;
   esac
 done
 
+# set buffer size
+./set_buffersize.sh -m "$buffer_size"
+
+# Get Initial Misses + Hits
+hits_init=$(psql --csv -f pgscripts/read_hits.sql | awk 'NR==2')
+total_init=$(psql --csv -f pgscripts/read_total.sql | awk 'NR==2')
+
 # run the benchmark
 bench_file=outputs/$(date -Iseconds)_${read_weight}_${update_weight}.txt
 pgbench -c ${CLIENTS} -s ${SCALE_FACTOR} -T "${time}" -f pgscripts/uniform_select.sql@"${read_weight}" -f pgscripts/uniform_update.sql@"${update_weight}" >> "$bench_file"
+
+# Get Ending Misses + Hits
+hits_after=$(psql --csv -f pgscripts/read_hits.sql | awk 'NR==2')
+total_after=$(psql --csv -f pgscripts/read_total.sql | awk 'NR==2')
+
+hits_delta=$( echo "$hits_after-$hits_init"| bc)
+total_delta=$( echo "$total_after-$total_init"| bc)
+ratio=$(python3 -c "print($hits_delta/$total_delta)" | bc)
+echo "ratio: $ratio" >> "$bench_file"
