@@ -63,7 +63,8 @@ static ClockSweepState *ClockSweepCtl = NULL;
 typedef struct
 {
     int32  sieve_hand;    // curr eviction hand (buf_id, NBuff == invalid/empty)
-    int32  sieve_head;    // head of 'list'
+    // int32  sieve_head;    // head of 'list' - unused
+	int32  bgw_sync_seq; //track sync pos for bgwriter
 	// Next[] and Prev[] arrs follow
 } SieveState;
 static SieveState *SieveCtl  = NULL;
@@ -333,19 +334,21 @@ SieveInitialize(bool found)
 	{
 		int			i;
 
-		SieveCtl->sieve_hand = NBuffers;	// set to defualt empty
-		SieveCtl->sieve_head = NBuffers;	//see above
+		//set to avoid err
+		SieveCtl->sieve_hand = 0;
+		// SieveCtl->sieve_head = NBuffers - 1;	//see above
+		SieveCtl->bgw_sync_seq = 0;
 
 		//loop around - empty
 		//Next[] points towards newer items & viseversa
-		SieveNext[NBuffers] = NBuffers; //Next[NBuff] points towards absolute tail
-		SievePrev[NBuffers] = NBuffers;
+		SieveNext[NBuffers] = NBuffers - 1; //Next[NBuff] points towards absolute tail
+		SievePrev[NBuffers] = 0;
 
-		// point all arr idx into null/NBuff
+		// link list in order
 		for (i = 0; i < NBuffers; i++)
 		{
-			SieveNext[i] = NBuffers;
-			SievePrev[i] = NBuffers;
+			SieveNext[i] = (i < NBuffers - 1) ? i + 1 : NBuffers;
+			SievePrev[i] = (i > 0) ? i - 1 : NBuffers;
 		}
 	}
 }
@@ -357,9 +360,11 @@ SieveAdvanceHand(void)
 	int32		cur  = SieveCtl->sieve_hand; //get curr hand pos
 	int32		next = SieveNext[cur];	// get nxt-> of curr
 
-	if (next == NBuffers) //curr was at head, wrap around to tail
+	if (next == NBuffers)
+	{ //curr was at head, wrap around to tail
 		next = SievePrev[NBuffers];
-
+		// StrategyControl->completePasses++; // increment to signal loop, fix bug
+	}	
 	SieveCtl->sieve_hand = next;
 }
 
@@ -405,6 +410,10 @@ SieveNotifyInsert(BufferDesc *buf)
 
 	SpinLockAcquire(&StrategyControl->buffer_strategy_lock);
 
+	//check if buf already present, if so, unlink and continue
+	if (SieveNext[buf_id] != NBuffers || SievePrev[buf_id] != NBuffers || SieveNext[NBuffers] == buf_id)
+          SieveUnlinkAndAdvance(buf_id);
+
 	old_head = SieveNext[NBuffers]; //get global head
 
 	SieveNext[buf_id] = NBuffers; //set new buf as head
@@ -428,11 +437,11 @@ SieveNotifyInsert(BufferDesc *buf)
 static void
 SieveNotifyInvalidate(BufferDesc *buf)
 {
-	int32		buf_id = buf->buf_id;
+	// int32		buf_id = buf->buf_id;
 
-	SpinLockAcquire(&StrategyControl->buffer_strategy_lock);
-	SieveUnlinkAndAdvance(buf_id); //call under lock
-	SpinLockRelease(&StrategyControl->buffer_strategy_lock);
+	// SpinLockAcquire(&StrategyControl->buffer_strategy_lock);
+	// SieveUnlinkAndAdvance(buf_id); //call under lock
+	// SpinLockRelease(&StrategyControl->buffer_strategy_lock);
 }
 
 /// use sieve pass policy to find victim buff
@@ -615,11 +624,11 @@ StrategySyncStart(uint32 *complete_passes, uint32 *num_buf_alloc)
 	if (ActiveEviction == &SieveVtable)
 	{
 		// *complete_passes = StrategyControl->completePasses;
-		int32 hand = SieveCtl->sieve_hand;
-		result = (hand == NBuffers) ? 0 : hand;
+		uint32 seq = (uint32) ++SieveCtl->bgw_sync_seq;
+		result = seq % NBuffers;
 		
 		if (complete_passes)
-			*complete_passes = StrategyControl->completePasses;
+          *complete_passes = seq / NBuffers;
 	}
 	else 
 	{

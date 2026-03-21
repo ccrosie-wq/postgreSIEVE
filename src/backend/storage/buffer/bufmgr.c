@@ -2781,6 +2781,7 @@ ExtendBufferedRelShared(BufferManagerRelation bmr,
 		for (uint32 i = extend_by; i < orig_extend_by; i++)
 		{
 			BufferDesc *buf_hdr = GetBufferDescriptor(buffers[i] - 1);
+			StrategyNotifyInsert(buf_hdr); //stop excess unpins
 
 			UnpinBuffer(buf_hdr);
 		}
@@ -2903,6 +2904,8 @@ ExtendBufferedRelShared(BufferManagerRelation bmr,
 							0);
 
 			LWLockRelease(partition_lock);
+
+			StrategyNotifyInsert(victim_buf_hdr); //add insert to prevent buf drain
 
 			/* XXX: could combine the locked operations in it with the above */
 			StartBufferIO(victim_buf_hdr, true, false);
