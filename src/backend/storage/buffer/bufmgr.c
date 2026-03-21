@@ -2246,6 +2246,8 @@ BufferAlloc(SMgrRelation smgr, char relpersistence, ForkNumber forkNum,
 
 	LWLockRelease(newPartitionLock);
 
+	StrategyNotifyInsert(victim_buf_hdr); //call to freelist
+
 	/*
 	 * Buffer contents are currently invalid.
 	 */
@@ -2337,6 +2339,8 @@ retry:
 	 * buffer, therefore BM_LOCK_WAKE_IN_PROGRESS should not be set.
 	 */
 	Assert(!(buf_state & BM_LOCK_WAKE_IN_PROGRESS));
+
+	StrategyNotifyInvalidate(buf); //call to freelist
 
 	/*
 	 * Clear out the buffer's tag and flags.  We must do this to ensure that
