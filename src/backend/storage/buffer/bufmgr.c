@@ -68,6 +68,7 @@
 #include "utils/rel.h"
 #include "utils/resowner.h"
 #include "utils/timestamp.h"
+#include "tracking/atomic_tracking_stats.h"
 
 
 /* Note: these two macros only work on shared buffers, not local ones! */
@@ -1247,15 +1248,19 @@ PinBufferForBlock(Relation rel,
 	if (persistence == RELPERSISTENCE_TEMP)
 	{
 		bufHdr = LocalBufferAlloc(smgr, forkNum, blockNum, foundPtr);
-		if (*foundPtr)
+		if (*foundPtr){
 			pgBufferUsage.local_blks_hit++;
+			RecordAtomicCacheHit();
+		}
 	}
 	else
 	{
 		bufHdr = BufferAlloc(smgr, persistence, forkNum, blockNum,
 							 strategy, foundPtr, io_context);
-		if (*foundPtr)
+		if (*foundPtr) {
 			pgBufferUsage.shared_blks_hit++;
+			RecordAtomicCacheHit();
+		}
 	}
 	if (rel)
 	{
@@ -1988,10 +1993,18 @@ AsyncReadBuffers(ReadBuffersOperation *operation, int *nblocks_progress)
 										  operation->smgr->smgr_rlocator.backend,
 										  true);
 
+		/*
+		This is where they update the block hits this gets stored
+		This get stored in the the buffer struct and is exposed to the user via pg_stat_database
+
+		*/
 		if (persistence == RELPERSISTENCE_TEMP)
 			pgBufferUsage.local_blks_hit += 1;
 		else
+		{
 			pgBufferUsage.shared_blks_hit += 1;
+			RecordAtomicCacheHit();
+		}
 
 		if (operation->rel)
 			pgstat_count_buffer_hit(operation->rel);
@@ -2057,11 +2070,17 @@ AsyncReadBuffers(ReadBuffersOperation *operation, int *nblocks_progress)
 					   io_pages, io_buffers_len);
 		pgstat_count_io_op_time(io_object, io_context, IOOP_READ,
 								io_start, 1, io_buffers_len * BLCKSZ);
-
+		/*
+		Updating the reads for the buffer alongside the block hits need to look at the buffer struct
+		
+		*/
 		if (persistence == RELPERSISTENCE_TEMP)
 			pgBufferUsage.local_blks_read += io_buffers_len;
 		else
+		{
 			pgBufferUsage.shared_blks_read += io_buffers_len;
+			RecordAtomicCacheMiss(io_buffers_len);
+		}
 
 		/*
 		 * Track vacuum cost when issuing IO, not after waiting for it.

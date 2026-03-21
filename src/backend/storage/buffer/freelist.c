@@ -20,6 +20,7 @@
 #include "storage/buf_internals.h"
 #include "storage/bufmgr.h"
 #include "storage/proc.h"
+#include "tracking/atomic_tracking_stats.h"
 
 #define INT_ACCESS_ONCE(var)	((int)(*((volatile int *)&(var))))
 
@@ -387,6 +388,10 @@ StrategyShmemSize(void)
 	/* size of the shared replacement strategy control block */
 	size = add_size(size, MAXALIGN(sizeof(BufferStrategyControl)));
 
+	/* size of the shared atomic tracking stats. PostgreSQL requires shared memory segments to be properly aligned. 
+	MAXALIGN rounds up to the platform's maximum alignment requirement so there are no boundary issues.*/
+	size = add_size(size, MAXALIGN(sizeof(AtomicStats)));
+
 	return size;
 }
 
@@ -401,6 +406,7 @@ void
 StrategyInitialize(bool init)
 {
 	bool		found;
+	bool 		atomic_found;
 
 	/*
 	 * Initialize the shared buffer lookup hashtable.
@@ -443,6 +449,18 @@ StrategyInitialize(bool init)
 	}
 	else
 		Assert(!init);
+
+
+	AtomicStatsPointer = (AtomicStats *)
+		ShmemInitStruct("Atomic Tracking Stats",
+						sizeof(AtomicStats),
+						&atomic_found);
+	if (!atomic_found)
+	{
+		pg_atomic_init_u64(&AtomicStatsPointer->atomic_cache_hits, 0);
+		pg_atomic_init_u64(&AtomicStatsPointer->atomic_cache_misses, 0);
+
+	}	
 }
 
 

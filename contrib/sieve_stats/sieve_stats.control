@@ -1,0 +1,4 @@
+comment = 'Sieve cache hit ratio stats'
+default_version = '1.0'
+module_pathname = '$libdir/sieve_stats'
+relocatable = true
