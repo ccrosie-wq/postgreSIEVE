@@ -2,6 +2,7 @@
 # Accept outputs of pgbench and aggregate into CSV that can be formatted into graphs and tables
 
 SCALE_FACTOR="1000"
+CLIENTS="12"
 
 read_weight=1
 update_weight=1
@@ -33,4 +34,4 @@ chmod -R g+rwx pgscripts/* # ensure permissions are retained so users can still 
 
 # run the benchmark
 bench_file=outputs/$(date -Iseconds)_${read_weight}_${update_weight}_${alpha}.txt
-pgbench -s ${SCALE_FACTOR} -T "${time}" -f pgscripts/zipfian_select.sql@"${read_weight}" -f pgscripts/zipfian_update.sql@"${update_weight}" >> "$bench_file"
+pgbench -c ${CLIENTS} -s ${SCALE_FACTOR} -T "${time}" -f pgscripts/zipfian_select.sql@"${read_weight}" -f pgscripts/zipfian_update.sql@"${update_weight}" >> "$bench_file"

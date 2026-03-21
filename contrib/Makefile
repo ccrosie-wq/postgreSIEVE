@@ -45,6 +45,7 @@ SUBDIRS = \
 		postgres_fdw	\
 		seg		\
 		spi		\
+		sieve_stats \
 		tablefunc	\
 		tcn		\
 		test_decoding	\
