@@ -73,16 +73,21 @@ rate of a Bloom filter.
 % =============================================================================
 \section{Architecture}
 % =============================================================================
-This is where your papers will differ depending on what type of project you
-have. At this point everything is extremely flexible and depends on how you
-want to structure your paper.
+We use a new eviction policy framework which routes high level hit, insert, and
+invalidate calls from the buffer manager through to methods specific to each
+eviction strategy. This approach was chosen with the goal of allowing the eviction
+algorithm to be chosen at runtime rather than requiring recompilation of the source
+code, or switching between different versions of the project.
 
-\subsection{TemplateDB}
+\subsection{SIEVE Implementation}
 
-An example is the LSM project, generally you would want to start explaining
-your system architecture here. Additional features may also belong here. If
-you're benchmarking RocksDB you may end up explaining some of the experimental
-set ups (assuming you've defined the problem at hand!)
+Our SIEVE implementation uses two arrays, SieveNext and SievePrev, to track page
+positions and emulate a linked list, along with two \emph{head} and \emph{hand}
+pointers to manage the SIEVE algorithm. Each array is sized according to the
+number of buffers configured, where the Nth element of SieveNext and SievePrev
+point to the head and tail respectively. During an insertion or invalidation,
+the \emph{head} pointer is updated, and SieveNext and SievePrev values are
+updated to reflect the new ordering of the list.
 
 
 \subsection{Solution Design}
