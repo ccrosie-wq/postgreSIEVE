@@ -30,7 +30,7 @@ while getopts ":r:u:t:a:b:" opt; do
 done
 
 # set buffer size
-./set_buffersize -m "$buffer_size"
+./set_buffersize.sh -m "$buffer_size"
 
 # apply alpha
 tmp=$(mktemp)
@@ -38,6 +38,19 @@ alp=$alpha awk '/\\set alpha/ {$0="\\set alpha "ENVIRON["alp"]""; print; next} {
 alp=$alpha awk '/\\set alpha/ {$0="\\set alpha "ENVIRON["alp"]""; print; next} {print}' pgscripts/zipfian_update.sql > "$tmp" && mv "$tmp" pgscripts/zipfian_update.sql
 chmod -R g+rwx pgscripts/* # ensure permissions are retained so users can still read the file
 
+# Get Initial Misses + Hits
+hits_init=$(psql --csv -f pgscripts/read_hits.sql | awk 'NR==2')
+total_init=$(psql --csv -f pgscripts/read_total.sql | awk 'NR==2')
+
 # run the benchmark
 bench_file=outputs/$(date -Iseconds)_${read_weight}_${update_weight}_${alpha}.txt
 pgbench -c ${CLIENTS} -s ${SCALE_FACTOR} -T "${time}" -f pgscripts/zipfian_select.sql@"${read_weight}" -f pgscripts/zipfian_update.sql@"${update_weight}" >> "$bench_file"
+
+# Get Ending Misses + Hits
+hits_after=$(psql --csv -f pgscripts/read_hits.sql | awk 'NR==2')
+total_after=$(psql --csv -f pgscripts/read_total.sql | awk 'NR==2')
+
+hits_delta=$( echo "$hits_after-$hits_init"| bc)
+total_delta=$( echo "$total_after-$total_init"| bc)
+ratio=$(python3 -c "print($hits_delta/$total_delta)" | bc)
+echo "ratio: $ratio" >> "$bench_file"

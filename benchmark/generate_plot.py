@@ -15,7 +15,8 @@ class ExtractFormat:
 
 # format = (starting token of line, type of data, index of value of interest in the string (separated by " "))
 TPS = ExtractFormat("tps", float, " ", 2, "", "Transactions / Second")
-DISPLAY_STATS = [TPS]
+RATIO = ExtractFormat("ratio", float, " ", 1, "", "hits / total")
+DISPLAY_STATS = [TPS, RATIO]
 
 # indices of these values in the file names (split by _)
 READ = 1
@@ -74,6 +75,8 @@ def main():
                 values.append(val)
 
         chart_out = Path(args.output) / f'{stat.name}.png'
+        
+        print(values)
 
         # save bar chart
         plt.bar(labels, values)
@@ -83,6 +86,7 @@ def main():
 
         # Display the chart
         plt.savefig(chart_out)
+        plt.close()
 
 if __name__ == "__main__":
     main()
