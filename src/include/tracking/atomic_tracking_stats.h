@@ -22,8 +22,6 @@ typedef struct AtomicStats
 {
     pg_atomic_uint64        atomic_cache_hits;
     pg_atomic_uint64        atomic_cache_misses;       
-    pg_atomic_uint64        atomic_throughput;
-    pg_atomic_uint64        atomic_latency;
 
     
 }AtomicStats;
@@ -35,15 +33,11 @@ extern AtomicStats *AtomicStatsPointer;
 * APIs to be called by the internals
 */
 
-extern void RecordAtomicCacheHitRatio(void);
-extern void RecordAtomicLatencyNum(void);
+// extern void RecordAtomicCacheHitRatio(void);
+extern void RecordAtomicCacheHit(void);
+extern void RecordAtomicCacheMiss(uint64 count);
 
-
-/*
-* APIs to be called by the SQL queries to provide the final output
-*/
-extern void GenAtomicThroughputNum(void);
-extern void GenAtomicStats(void);
+extern double GenAtomicStats(void);
 
 
 

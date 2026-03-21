@@ -18,6 +18,7 @@ SUBDIRS = \
 	lmgr \
 	page \
 	smgr \
-	sync
+	sync \
+	tracking
 
 include $(top_srcdir)/src/backend/common.mk

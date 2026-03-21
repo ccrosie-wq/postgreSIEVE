@@ -68,6 +68,7 @@
 #include "utils/rel.h"
 #include "utils/resowner.h"
 #include "utils/timestamp.h"
+#include "tracking/atomic_tracking_stats.h"
 
 
 /* Note: these two macros only work on shared buffers, not local ones! */
@@ -1247,15 +1248,19 @@ PinBufferForBlock(Relation rel,
 	if (persistence == RELPERSISTENCE_TEMP)
 	{
 		bufHdr = LocalBufferAlloc(smgr, forkNum, blockNum, foundPtr);
-		if (*foundPtr)
+		if (*foundPtr){
 			pgBufferUsage.local_blks_hit++;
+			RecordAtomicCacheHit();
+		}
 	}
 	else
 	{
 		bufHdr = BufferAlloc(smgr, persistence, forkNum, blockNum,
 							 strategy, foundPtr, io_context);
-		if (*foundPtr)
+		if (*foundPtr) {
 			pgBufferUsage.shared_blks_hit++;
+			RecordAtomicCacheHit();
+		}
 	}
 	if (rel)
 	{
@@ -1997,6 +2002,7 @@ AsyncReadBuffers(ReadBuffersOperation *operation, int *nblocks_progress)
 			pgBufferUsage.local_blks_hit += 1;
 		else
 			pgBufferUsage.shared_blks_hit += 1;
+			RecordAtomicCacheHit();
 
 		if (operation->rel)
 			pgstat_count_buffer_hit(operation->rel);
@@ -2070,6 +2076,7 @@ AsyncReadBuffers(ReadBuffersOperation *operation, int *nblocks_progress)
 			pgBufferUsage.local_blks_read += io_buffers_len;
 		else
 			pgBufferUsage.shared_blks_read += io_buffers_len;
+			RecordAtomicCacheMiss(io_buffers_len);
 
 		/*
 		 * Track vacuum cost when issuing IO, not after waiting for it.

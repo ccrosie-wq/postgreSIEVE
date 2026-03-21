@@ -10,33 +10,47 @@
  *-------------------------------------------------------------------------
  */
 
-#include "atomic_tracking_stats.h"
 #include "postgres.h"
+#include "tracking/atomic_tracking_stats.h"
 
 AtomicStats *AtomicStatsPointer = NULL;
 
-void 
-RecordAtomicCacheHitRatio(void)
+
+void
+RecordAtomicCacheHit(void)
 {
-    // Implement the logic to calculate and update the cache hit ratio using atomic_cache_hits and atomic_cache_misses
+    if (AtomicStatsPointer == NULL) return;
+    pg_atomic_fetch_add_u64(&AtomicStatsPointer->atomic_cache_hits, 1);
+    
 };
 
-void 
-RecordAtomicThroughputNum(void)
+void
+RecordAtomicCacheMiss(uint64 count)
 {
-    // Implement the logic to calculate and update the throughput number using atomic_throughput
+    if (AtomicStatsPointer == NULL) return;
+    pg_atomic_fetch_add_u64(&AtomicStatsPointer->atomic_cache_misses, count);
 };
 
-void 
-GenAtomicLatencyNum(void)
-{
-    // Implement the logic to calculate and update the latency number using atomic_latency
-};
 
-void 
+double 
 GenAtomicStats(void)
 {
+
     // Implement the logic that calculates each metric for cache ratio, latency, and throughput
-    // Write a small sql query that returns a table of the metrics 
+    //this is being hooking into a c-function to be called by sql 
+
+    uint64 hits;
+    uint64 misses;
+
+    uint64 total;
+
+    hits = pg_atomic_read_u64(&AtomicStatsPointer->atomic_cache_hits);
+    misses = pg_atomic_read_u64(&AtomicStatsPointer->atomic_cache_misses);
+    // guard against dividing by zero
+    total = hits + misses;
+    if (total == 0) return 0.0;
+    return (double)hits / (double)total;
+    
+
 };
 

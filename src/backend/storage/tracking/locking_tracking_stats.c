@@ -11,8 +11,8 @@
  */
 
 
-#include "locking_tracking_stats.h"
 #include "postgres.h"
+#include "tracking/locking_tracking_stats.h"
 
 LockingStats *LockingStatsPointer = NULL;
 
