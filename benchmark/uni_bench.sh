@@ -3,6 +3,7 @@
 
 SCALE_FACTOR="1000"
 CLIENTS="12"
+THREADS="2"
 
 read_weight=1
 update_weight=1
@@ -35,7 +36,7 @@ total_init=$(psql --csv -f pgscripts/read_total.sql | awk 'NR==2')
 
 # run the benchmark
 bench_file=outputs/$(date -Iseconds)_${read_weight}_${update_weight}.txt
-pgbench -c ${CLIENTS} -s ${SCALE_FACTOR} -T "${time}" -f pgscripts/uniform_select.sql@"${read_weight}" -f pgscripts/uniform_update.sql@"${update_weight}" >> "$bench_file"
+pgbench -j ${THREADS} -c ${CLIENTS} -s ${SCALE_FACTOR} -T "${time}" -f pgscripts/uniform_select.sql@"${read_weight}" -f pgscripts/uniform_update.sql@"${update_weight}" >> "$bench_file"
 
 # Get Ending Misses + Hits
 hits_after=$(psql --csv -f pgscripts/read_hits.sql | awk 'NR==2')

@@ -2,7 +2,7 @@
 # Accept outputs of pgbench and aggregate into CSV that can be formatted into graphs and tables
 
 SCALE_FACTOR="1000"
-THREADS="6"
+THREADS="2"
 CLIENTS="12"
 
 read_weight=1

@@ -17,7 +17,7 @@ class ExtractFormat:
 # format = (starting token of line, type of data, index of value of interest in the string (separated by " "))
 TPS = ExtractFormat("tps", float, " ", 2, "", "Transactions / Second")
 RATIO = ExtractFormat("ratio", float, " ", 1, "", "hits / total")
-DISPLAY_STATS = [TPS] # , RATIO]
+DISPLAY_STATS = [TPS , RATIO]
 
 
 # indices of these values in the file names (split by _)
@@ -73,15 +73,18 @@ def main():
         labels = []
         values = {}
         for dir in input_dirs:
+            values[dir] = []
             labels_loc = []
             # Iterate over every combination of read and update weight
-            for r in read_update_dict.get(dir).keys():
-                for u in read_update_dict.get(dir)[r].keys():
+            for r in sorted(read_update_dict.get(dir).keys()):
+                for u in sorted(read_update_dict.get(dir)[r].keys()):
                     display_name = f"{r}/{u}"
-                    values[dir] = read_update_dict.get(dir)[r][u][stat.name]
+                    values[dir].append(read_update_dict.get(dir)[r][u][stat.name])
                     labels_loc.append(display_name)
             labels.append(labels_loc)
         labels = labels[0]
+        
+        print(values)
 
         chart_out = Path(args.output) / f'{stat.name}.png'
         
@@ -99,7 +102,7 @@ def main():
                 pattern += 1
                 pattern %= len(patterns)
             ax.bar_label(rects, padding=3)
-            measure_max = max(measure_max, measurement)
+            measure_max = max(measure_max, max(measurement))
             multiplier += 1
         
         print(values)
@@ -111,7 +114,6 @@ def main():
         ax.legend(loc='upper left', ncols=3)
         ax.set_ylim(0, measure_max*1.25)
         plt.title(f"{args.title} {stat.name}")
-
         # Display the chart
         plt.savefig(chart_out)
         plt.close()
