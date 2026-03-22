@@ -117,29 +117,27 @@ Because the Shared Computing Cluster (SCC) has routine downtime and does not off
 The default bufferpool size in Postgres is 128MB, so we start by evaluating the difference between SIEVE and the default Clocksweep implementation with this buffer size. As shown in Figures \bad{fill this in}, the performance difference between the implementations is negligible for both uniform and Zipfian distributions. Moving to an 8MB bufferpool, we see that the the trend continues.
 
 \begin{figure}[ht]
-    \includegraphics[width=3cm]{example-image-a}
-    \caption{Example figure here}
-    \label{fig:filler}
+    \includegraphics[width=4cm]{images/uniform_8mb_tps.png}
+    \includegraphics[width=4cm]{images/uniform_8mb_cache.png}
+    \caption{Uniform queries with 8MB Cache}
+\end{figure}
+\begin{figure}[ht]
+    \includegraphics[width=4cm]{images/uniform_128mb_tps.png}
+    \includegraphics[width=4cm]{images/uniform_128mb_cache.png}
+    \caption{Uniform queries with 128MB Cache}
+\end{figure}
+\begin{figure}[ht]
+    \includegraphics[width=4cm]{images/zipf_8mb_tps.png}
+    \includegraphics[width=4cm]{images/zipf_8mb_cache.png}
+    \caption{Zipfian queries with 8MB Cache}
+\end{figure}
+\begin{figure}[ht]
+    \includegraphics[width=4cm]{images/zipf_128mb_tps.png}
+    \includegraphics[width=4cm]{images/zipf_128mb_cache.png}
+    \caption{Zipfian queries with 128MB Cache}
 \end{figure}
 
-\begin{table}[H]
-    \caption{An example table}
-	\label{tab:ex}
-	\centering
 
-	\begin{tabular}{c |c c c c c}
-        \hline\hline
-        & Col A & Col B \\
-        \hline
-        Row A & val 1 & val a \\
-        Row B & val 2 & val b \\
-        Row C & val 3 & val c \\
-	\hline
-	\end{tabular}
-\end{table}
-
-You can also reference your old figures (Figure \ref{fig:filler}) and tables 
-(Table \ref{tab:ex})
 % =============================================================================
 \section{Conclusion}
 % =============================================================================
