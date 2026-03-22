@@ -31,7 +31,19 @@
 }
 
 \begin{abstract}
-    Abstract here! 
+    In an world defined by rapid data growth, the demand for near-instantaneous data access has become ubiquitous. 
+    To meet these latency requirements, modern systems extensively employ caching mechanisms to store frequently accessed data, thereby mitigating costly I/O operations. 
+    However, caches are finite have limited memory, that is where cache evection policies come into play. 
+    Eviction policies help determine when data in a cache is no longer needed and removes it creating room for new data. 
+    There are many popular ways of achieving this through different algorithms, some of the most common algorithms are Least Recently Used (LRU), Least Frequently Used (LFU), 
+    First In First Out (FIFO), and many others. These algorithms can be modified to the systems needs to improve on the native behavior of the policy. 
+    Today many database systems leverage these policies to minimize high-latency disk operations and maintain "hot" data in memory. 
+    PostgreSQL is such one that naively implements the Clock Sweep cache eviction policy. 
+    Clock Sweep is a take on the LRU policy and its designed to minimize the overhead of maintaining an ordered list of recently used pages. 
+    For our project we attempt to implement SIEVE, an eviction policy originally designed as a better LRU but for web caches into PostgreSQL. 
+    SIEVE is advantageous due to its lock-less design and its ability to be integrated into existing cache architectures. 
+    Whilst SIEVE was originally made for the web, there could be possible use for it in database systems such as PostgreSQL. 
+    Our experiments benchmark Sieve against other eviction policies using the TPC-C workload and PG-Bench. [Insert quick synopsis of test results - RYAN]
 \end{abstract}
 
 \maketitle
