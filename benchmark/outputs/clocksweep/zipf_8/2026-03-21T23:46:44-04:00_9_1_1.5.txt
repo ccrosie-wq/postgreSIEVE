@@ -1,0 +1,28 @@
+pgbench (19devel)
+transaction type: multiple scripts
+scaling factor: 1000
+query mode: simple
+number of clients: 12
+number of threads: 2
+maximum number of tries: 1
+duration: 180 s
+number of transactions actually processed: 13482540
+number of failed transactions: 0 (0.000%)
+latency average = 0.160 ms
+initial connection time = 8.935 ms
+tps = 74904.677032 (without initial connection time)
+SQL script 1: pgscripts/zipfian_select.sql
+ - weight: 9 (targets 90.0% of total)
+ - 12131163 transactions (90.0% of total)
+ - number of transactions actually processed: 12131163 (tps = 67396.858941)
+ - number of failed transactions: 0 (0.000%)
+ - latency average = 0.113 ms
+ - latency stddev = 0.030 ms
+SQL script 2: pgscripts/zipfian_update.sql
+ - weight: 1 (targets 10.0% of total)
+ - 1345896 transactions (10.0% of total)
+ - number of transactions actually processed: 1345896 (tps = 7477.367410)
+ - number of failed transactions: 0 (0.000%)
+ - latency average = 0.554 ms
+ - latency stddev = 0.484 ms
+ratio: 1.0
