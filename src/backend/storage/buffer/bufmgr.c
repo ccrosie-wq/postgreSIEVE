@@ -2265,6 +2265,8 @@ BufferAlloc(SMgrRelation smgr, char relpersistence, ForkNumber forkNum,
 
 	LWLockRelease(newPartitionLock);
 
+	StrategyNotifyInsert(victim_buf_hdr); //call to freelist
+
 	/*
 	 * Buffer contents are currently invalid.
 	 */
@@ -2356,6 +2358,8 @@ retry:
 	 * buffer, therefore BM_LOCK_WAKE_IN_PROGRESS should not be set.
 	 */
 	Assert(!(buf_state & BM_LOCK_WAKE_IN_PROGRESS));
+
+	StrategyNotifyInvalidate(buf); //call to freelist
 
 	/*
 	 * Clear out the buffer's tag and flags.  We must do this to ensure that
@@ -2796,6 +2800,7 @@ ExtendBufferedRelShared(BufferManagerRelation bmr,
 		for (uint32 i = extend_by; i < orig_extend_by; i++)
 		{
 			BufferDesc *buf_hdr = GetBufferDescriptor(buffers[i] - 1);
+			StrategyNotifyInsert(buf_hdr); //stop excess unpins
 
 			UnpinBuffer(buf_hdr);
 		}
@@ -2918,6 +2923,8 @@ ExtendBufferedRelShared(BufferManagerRelation bmr,
 							0);
 
 			LWLockRelease(partition_lock);
+
+			StrategyNotifyInsert(victim_buf_hdr); //add insert to prevent buf drain
 
 			/* XXX: could combine the locked operations in it with the above */
 			StartBufferIO(victim_buf_hdr, true, false);

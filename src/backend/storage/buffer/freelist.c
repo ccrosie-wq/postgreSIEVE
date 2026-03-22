@@ -24,6 +24,12 @@
 
 #define INT_ACCESS_ONCE(var)	((int)(*((volatile int *)&(var))))
 
+typedef enum EvictionPolicy
+{
+    EVICTION_CLOCKSWEEP = 0,   // default
+    EVICTION_SIEVE      = 1,   
+} EvictionPolicy;
+
 
 /*
  * The shared freelist control information.
@@ -33,29 +39,84 @@ typedef struct
 	/* Spinlock: protects the values below */
 	slock_t		buffer_strategy_lock;
 
-	/*
-	 * clock-sweep hand: index of next buffer to consider grabbing. Note that
-	 * this isn't a concrete buffer - we only ever increase the value. So, to
-	 * get an actual buffer, it needs to be used modulo NBuffers.
-	 */
-	pg_atomic_uint32 nextVictimBuffer;
-
-	/*
-	 * Statistics.  These counters should be wide enough that they can't
-	 * overflow during a single bgwriter cycle.
-	 */
-	uint32		completePasses; /* Complete cycles of the clock-sweep */
-	pg_atomic_uint32 numBufferAllocs;	/* Buffers allocated since last reset */
-
+	EvictionPolicy    active_policy;          // define policy
+    uint32            completePasses;         //-- bgwriter: full traversal count
+    pg_atomic_uint32  numBufferAllocs;        /* Buffers allocated since last reset */
+    
 	/*
 	 * Bgworker process to be notified upon activity or -1 if none. See
 	 * StrategyNotifyBgWriter.
 	 */
-	int			bgwprocno;
-} BufferStrategyControl;
+	int               bgwprocno;             //-- bgwriter latch (-1 = none)
+} BufferStrategyCommon;
 
 /* Pointers to shared state */
-static BufferStrategyControl *StrategyControl = NULL;
+static BufferStrategyCommon *StrategyControl = NULL;
+
+
+//addition for clocksweep
+typedef struct { 
+	pg_atomic_uint32 nextVictimBuffer; 
+} ClockSweepState;
+
+static ClockSweepState *ClockSweepCtl = NULL;
+
+typedef struct
+{
+    int32  sieve_hand;    // curr eviction hand (buf_id, NBuff == invalid/empty)
+    // int32  sieve_head;    // head of 'list' - unused
+	int32  bgw_sync_seq; //track sync pos for bgwriter
+	// Next[] and Prev[] arrs follow
+} SieveState;
+static SieveState *SieveCtl  = NULL;
+static int32      *SieveNext = NULL;
+static int32      *SievePrev = NULL;
+
+//hold passthrough refs for policy methods
+typedef struct EvictionVtable
+{
+    BufferDesc *(*get_buffer)(BufferAccessStrategy, uint64 *);
+    void        (*notify_hit)(BufferDesc *);        // cache hit
+    void        (*notify_insert)(BufferDesc *);     // new page load
+    void        (*notify_invalidate)(BufferDesc *); // inavalidate
+    Size        (*shmem_size)(int n_buffers);
+    void        (*initialize)(bool found);
+} EvictionVtable;
+
+
+//declare cswp funcs
+static Size ClockSweepShmemSize(int n_buffers);
+static void ClockSweepInitialize(bool found);
+static BufferDesc *ClockSweepGetBuffer(BufferAccessStrategy strategy, uint64 *buf_state);
+
+//declare sieve funcs
+static Size SieveShmemSize(int n_buffers);
+static void SieveInitialize(bool found);
+static BufferDesc *SieveGetBuffer(BufferAccessStrategy strategy, uint64 *buf_state);
+static void SieveNotifyInsert(BufferDesc *buf);
+static void SieveNotifyInvalidate(BufferDesc *buf);
+
+//cswp specific refs
+static const EvictionVtable ClockSweepVtable = {
+    .get_buffer        = ClockSweepGetBuffer,
+    .notify_hit        = NULL,        //no
+    .notify_insert     = NULL,        //no
+    .notify_invalidate = NULL,        //no
+    .shmem_size        = ClockSweepShmemSize,
+    .initialize        = ClockSweepInitialize,
+};
+
+//sieve refs
+static const EvictionVtable SieveVtable = {
+	.get_buffer        = SieveGetBuffer,
+	.notify_hit        = NULL,           /* PinBuffer CAS bumps usage_count → visited=1 */
+	.notify_insert     = SieveNotifyInsert,
+	.notify_invalidate = SieveNotifyInvalidate,
+	.shmem_size        = SieveShmemSize,
+	.initialize        = SieveInitialize,
+};
+
+static const EvictionVtable *ActiveEviction = NULL; //set at strat init
 
 /*
  * Private (non-shared) state for managing a ring of shared buffers to re-use.
@@ -91,9 +152,16 @@ static BufferDesc *GetBufferFromRing(BufferAccessStrategy strategy,
 static void AddBufferToRing(BufferAccessStrategy strategy,
 							BufferDesc *buf);
 
+
+
+////////////////////////////////////////////////////////////
+////////////CLOCK SWEEP STUFF            ///////////////////
+////////////////////////////////////////////////////////////
+
+
 /*
  * ClockSweepTick - Helper routine for StrategyGetBuffer()
- *
+ * now for ClockSweepGetBuffer() <-
  * Move the clock hand one buffer ahead of its current position and return the
  * id of the buffer now under the hand.
  */
@@ -107,8 +175,7 @@ ClockSweepTick(void)
 	 * doing this, this can lead to buffers being returned slightly out of
 	 * apparent order.
 	 */
-	victim =
-		pg_atomic_fetch_add_u32(&StrategyControl->nextVictimBuffer, 1);
+	victim = pg_atomic_fetch_add_u32(&ClockSweepCtl->nextVictimBuffer, 1);
 
 	if (victim >= NBuffers)
 	{
@@ -145,7 +212,7 @@ ClockSweepTick(void)
 
 				wrapped = expected % NBuffers;
 
-				success = pg_atomic_compare_exchange_u32(&StrategyControl->nextVictimBuffer,
+				success = pg_atomic_compare_exchange_u32(&ClockSweepCtl->nextVictimBuffer,
 														 &expected, wrapped);
 				if (success)
 					StrategyControl->completePasses++;
@@ -155,6 +222,310 @@ ClockSweepTick(void)
 	}
 	return victim;
 }
+
+
+static Size //r
+ClockSweepShmemSize(int n_buffers)
+{
+    return sizeof(ClockSweepState);
+}
+
+static void
+ClockSweepInitialize(bool found)
+{
+	//ClockSweepCTL set in StrategyInitialize
+    if (!found)
+        pg_atomic_init_u32(&ClockSweepCtl->nextVictimBuffer, 0); //fancy =0
+}
+
+
+//select next victim, replaces StrategyGetBuffer() to target clock sweep
+//most of the function remains unchanged, the top bit remains in the OG StratGetbuff
+static BufferDesc *
+ClockSweepGetBuffer(BufferAccessStrategy strategy, uint64 *buf_state)
+{
+    BufferDesc *buf;
+    int         trycounter = NBuffers;
+
+    for (;;)
+    {
+        uint64  old_buf_state;
+        uint64  local_buf_state;
+
+        buf = GetBufferDescriptor(ClockSweepTick());
+
+        old_buf_state = pg_atomic_read_u64(&buf->state);
+        for (;;)
+        {
+            local_buf_state = old_buf_state;
+
+            if (BUF_STATE_GET_REFCOUNT(local_buf_state) != 0)
+            {
+                if (--trycounter == 0) 
+				{
+					/*
+					 * We've scanned all the buffers without making any state
+					 * changes, so all the buffers are pinned (or were when we
+					 * looked at them). We could hope that someone will free
+					 * one eventually, but it's probably better to fail than
+					 * to risk getting stuck in an infinite loop.
+					 */
+
+                    elog(ERROR, "no unpinned buffers available");
+				}
+                break;
+            }
+
+            if (unlikely(local_buf_state & BM_LOCKED))
+            {
+                old_buf_state = WaitBufHdrUnlocked(buf);
+                continue;
+            }
+
+            if (BUF_STATE_GET_USAGECOUNT(local_buf_state) != 0)
+            {
+                local_buf_state -= BUF_USAGECOUNT_ONE;
+                if (pg_atomic_compare_exchange_u64(&buf->state,
+												   &old_buf_state,
+                                                   local_buf_state))
+                {
+                    trycounter = NBuffers;
+                    break;
+                }
+            }
+            else
+            {
+                local_buf_state += BUF_REFCOUNT_ONE;
+                if (pg_atomic_compare_exchange_u64(&buf->state,
+                                                   &old_buf_state,
+                                                   local_buf_state))
+                {
+                    if (strategy != NULL)
+                        AddBufferToRing(strategy, buf);
+                    *buf_state = local_buf_state;
+                    TrackNewBufferPin(BufferDescriptorGetBuffer(buf));
+                    return buf;
+                }
+            }
+        }
+    }
+}
+
+
+////////////////////////////////////////////////////////////
+/////////   SIEVE FUNCS               //////////////////////
+////////////////////////////////////////////////////////////
+
+
+static Size
+SieveShmemSize(int n_buffers)
+{
+	return sizeof(SieveState) + 2 * (n_buffers + 1) * sizeof(int32);
+} //alloc for next/prev arrs
+
+
+static void
+SieveInitialize(bool found)
+{
+	/* SieveCtl already points into shmem (set by StrategyInitialize) */
+	SieveNext = (int32 *) (SieveCtl + 1); //point into emtpy slots left my shmem dec.
+	SievePrev = SieveNext + (NBuffers + 1);
+
+	if (!found)
+	{
+		int			i;
+
+		//set to avoid err
+		SieveCtl->sieve_hand = 0;
+		// SieveCtl->sieve_head = NBuffers - 1;	//see above
+		SieveCtl->bgw_sync_seq = 0;
+
+		//loop around - empty
+		//Next[] points towards newer items & viseversa
+		SieveNext[NBuffers] = NBuffers - 1; //Next[NBuff] points towards absolute tail
+		SievePrev[NBuffers] = 0;
+
+		// link list in order
+		for (i = 0; i < NBuffers; i++)
+		{
+			SieveNext[i] = (i < NBuffers - 1) ? i + 1 : NBuffers;
+			SievePrev[i] = (i > 0) ? i - 1 : NBuffers;
+		}
+	}
+}
+
+//advance list hand
+static inline void
+SieveAdvanceHand(void)
+{
+	int32		cur  = SieveCtl->sieve_hand; //get curr hand pos
+	int32		next = SieveNext[cur];	// get nxt-> of curr
+
+	if (next == NBuffers)
+	{ //curr was at head, wrap around to tail
+		next = SievePrev[NBuffers];
+		// StrategyControl->completePasses++; // increment to signal loop, fix bug
+	}	
+	SieveCtl->sieve_hand = next;
+}
+
+//drop buf_id from list, advance hand if it was already pointing at buf_id
+static void
+SieveUnlinkAndAdvance(int32 buf_id)
+{
+	int32		newer = SieveNext[buf_id]; //get neighbors
+	int32		older = SievePrev[buf_id];
+
+	//check for hand condition
+	if (SieveCtl->sieve_hand == buf_id)
+	{
+		int32		new_hand = newer; //step the hand forward
+
+		if (new_hand == NBuffers) //true if buf_id @ head
+			new_hand = older; // move head to prev instead
+		SieveCtl->sieve_hand = new_hand;
+	}
+
+	//stitch the gap
+	if (newer == NBuffers) //buf_id was head
+		SieveNext[NBuffers] = older; //prev(older) is now head
+	else
+		SievePrev[newer] = older; // newer points back to old
+
+	if (older == NBuffers) //buf_id was tail
+		SievePrev[NBuffers] = newer; //forward is new tail
+	else
+		SieveNext[older] = newer; //old points fwd to new
+
+	// clear the data for bufid
+	SieveNext[buf_id] = NBuffers;
+	SievePrev[buf_id] = NBuffers;
+}
+
+//call on load, insert buf at head
+static void
+SieveNotifyInsert(BufferDesc *buf)
+{
+	int32		buf_id   = buf->buf_id;
+	int32		old_head;
+
+	SpinLockAcquire(&StrategyControl->buffer_strategy_lock);
+
+	//check if buf already present, if so, unlink and continue
+	if (SieveNext[buf_id] != NBuffers || SievePrev[buf_id] != NBuffers || SieveNext[NBuffers] == buf_id)
+          SieveUnlinkAndAdvance(buf_id);
+
+	old_head = SieveNext[NBuffers]; //get global head
+
+	SieveNext[buf_id] = NBuffers; //set new buf as head
+	SievePrev[buf_id] = old_head; // point new to oldhead
+
+	if (old_head != NBuffers) //dont set if empty
+		SieveNext[old_head] = buf_id; // new <- old
+	else
+		SievePrev[NBuffers] = buf_id; // tail is also new buf
+
+	SieveNext[NBuffers] = buf_id; //global head is newbuf
+
+	//set hand if it was empty
+	if (SieveCtl->sieve_hand == NBuffers)
+		SieveCtl->sieve_hand = buf_id;
+
+	SpinLockRelease(&StrategyControl->buffer_strategy_lock);
+}
+
+//drop buf from list
+static void
+SieveNotifyInvalidate(BufferDesc *buf)
+{
+	// int32		buf_id = buf->buf_id;
+
+	// SpinLockAcquire(&StrategyControl->buffer_strategy_lock);
+	// SieveUnlinkAndAdvance(buf_id); //call under lock
+	// SpinLockRelease(&StrategyControl->buffer_strategy_lock);
+}
+
+/// use sieve pass policy to find victim buff
+static BufferDesc *
+SieveGetBuffer(BufferAccessStrategy strategy, uint64 *buf_state)
+{
+	int			trycounter = NBuffers;
+
+	SpinLockAcquire(&StrategyControl->buffer_strategy_lock);
+
+	for (;;)
+	{
+		int32		candidate;
+		BufferDesc *buf;
+		uint64		old_buf_state;
+		uint64		new_buf_state;
+
+		if (SieveCtl->sieve_hand == NBuffers)
+		{
+			SpinLockRelease(&StrategyControl->buffer_strategy_lock);
+			elog(ERROR, "no buffers in SIEVE eviction queue");
+		}
+
+		candidate     = SieveCtl->sieve_hand;
+		buf           = GetBufferDescriptor(candidate);
+		old_buf_state = pg_atomic_read_u64(&buf->state);
+
+		//skip
+		if (unlikely(old_buf_state & BM_LOCKED))
+		{
+			SieveAdvanceHand();
+			continue;
+		}
+
+		//skip
+		if (BUF_STATE_GET_REFCOUNT(old_buf_state) != 0)
+		{
+			SieveAdvanceHand();
+			if (--trycounter == 0)
+			{
+				SpinLockRelease(&StrategyControl->buffer_strategy_lock);
+				elog(ERROR, "no unpinned buffers available");
+			}
+			continue;
+		}
+
+		//reset visit
+		if (BUF_STATE_GET_USAGECOUNT(old_buf_state) != 0)
+		{
+			new_buf_state = old_buf_state & ~((uint64) BUF_USAGECOUNT_MASK);
+			(void) pg_atomic_compare_exchange_u64(&buf->state,
+												  &old_buf_state,
+												  new_buf_state);
+			SieveAdvanceHand();
+			trycounter = NBuffers; //reset attempts
+			continue;
+		}
+
+		// not visited, not claimed
+		new_buf_state = old_buf_state + BUF_REFCOUNT_ONE; //claim
+		if (pg_atomic_compare_exchange_u64(&buf->state, &old_buf_state, new_buf_state))
+		{ ///evict worked
+			SieveUnlinkAndAdvance(candidate);
+
+			if (strategy != NULL)
+				AddBufferToRing(strategy, buf);
+
+			*buf_state = new_buf_state;
+			TrackNewBufferPin(BufferDescriptorGetBuffer(buf));
+			SpinLockRelease(&StrategyControl->buffer_strategy_lock);
+			return buf;
+		}
+
+		//retry
+		trycounter = NBuffers;
+	}
+}
+
+
+////////////////////////////////////////////////////////////
+////////////////////////////////////////////////////////////
+////////////////////////////////////////////////////////////
+
 
 /*
  * StrategyGetBuffer
@@ -176,7 +547,7 @@ StrategyGetBuffer(BufferAccessStrategy strategy, uint64 *buf_state, bool *from_r
 {
 	BufferDesc *buf;
 	int			bgwprocno;
-	int			trycounter;
+	// int			trycounter;
 
 	*from_ring = false;
 
@@ -227,84 +598,7 @@ StrategyGetBuffer(BufferAccessStrategy strategy, uint64 *buf_state, bool *from_r
 	 */
 	pg_atomic_fetch_add_u32(&StrategyControl->numBufferAllocs, 1);
 
-	/* Use the "clock sweep" algorithm to find a free buffer */
-	trycounter = NBuffers;
-	for (;;)
-	{
-		uint64		old_buf_state;
-		uint64		local_buf_state;
-
-		buf = GetBufferDescriptor(ClockSweepTick());
-
-		/*
-		 * Check whether the buffer can be used and pin it if so. Do this
-		 * using a CAS loop, to avoid having to lock the buffer header.
-		 */
-		old_buf_state = pg_atomic_read_u64(&buf->state);
-		for (;;)
-		{
-			local_buf_state = old_buf_state;
-
-			/*
-			 * If the buffer is pinned or has a nonzero usage_count, we cannot
-			 * use it; decrement the usage_count (unless pinned) and keep
-			 * scanning.
-			 */
-
-			if (BUF_STATE_GET_REFCOUNT(local_buf_state) != 0)
-			{
-				if (--trycounter == 0)
-				{
-					/*
-					 * We've scanned all the buffers without making any state
-					 * changes, so all the buffers are pinned (or were when we
-					 * looked at them). We could hope that someone will free
-					 * one eventually, but it's probably better to fail than
-					 * to risk getting stuck in an infinite loop.
-					 */
-					elog(ERROR, "no unpinned buffers available");
-				}
-				break;
-			}
-
-			/* See equivalent code in PinBuffer() */
-			if (unlikely(local_buf_state & BM_LOCKED))
-			{
-				old_buf_state = WaitBufHdrUnlocked(buf);
-				continue;
-			}
-
-			if (BUF_STATE_GET_USAGECOUNT(local_buf_state) != 0)
-			{
-				local_buf_state -= BUF_USAGECOUNT_ONE;
-
-				if (pg_atomic_compare_exchange_u64(&buf->state, &old_buf_state,
-												   local_buf_state))
-				{
-					trycounter = NBuffers;
-					break;
-				}
-			}
-			else
-			{
-				/* pin the buffer if the CAS succeeds */
-				local_buf_state += BUF_REFCOUNT_ONE;
-
-				if (pg_atomic_compare_exchange_u64(&buf->state, &old_buf_state,
-												   local_buf_state))
-				{
-					/* Found a usable buffer */
-					if (strategy != NULL)
-						AddBufferToRing(strategy, buf);
-					*buf_state = local_buf_state;
-
-					TrackNewBufferPin(BufferDescriptorGetBuffer(buf));
-
-					return buf;
-				}
-			}
-		}
-	}
+	return ActiveEviction->get_buffer(strategy, buf_state); //ref to et func
 }
 
 /*
@@ -325,18 +619,33 @@ StrategySyncStart(uint32 *complete_passes, uint32 *num_buf_alloc)
 	int			result;
 
 	SpinLockAcquire(&StrategyControl->buffer_strategy_lock);
-	nextVictimBuffer = pg_atomic_read_u32(&StrategyControl->nextVictimBuffer);
+	nextVictimBuffer = pg_atomic_read_u32(&ClockSweepCtl->nextVictimBuffer);
 	result = nextVictimBuffer % NBuffers;
 
-	if (complete_passes)
+	if (ActiveEviction == &SieveVtable)
 	{
-		*complete_passes = StrategyControl->completePasses;
+		// *complete_passes = StrategyControl->completePasses;
+		uint32 seq = (uint32) ++SieveCtl->bgw_sync_seq;
+		result = seq % NBuffers;
+		
+		if (complete_passes)
+          *complete_passes = seq / NBuffers;
+	}
+	else 
+	{
+		nextVictimBuffer = pg_atomic_read_u32(&ClockSweepCtl->nextVictimBuffer);
+		result = nextVictimBuffer % NBuffers;
 
-		/*
-		 * Additionally add the number of wraparounds that happened before
-		 * completePasses could be incremented. C.f. ClockSweepTick().
-		 */
-		*complete_passes += nextVictimBuffer / NBuffers;
+		if (complete_passes)
+		{
+			*complete_passes = StrategyControl->completePasses;
+
+			/*
+			 * Additionally add the number of wraparounds that happened before
+			 * completePasses could be incremented. C.f. ClockSweepTick().
+			 */
+			*complete_passes += nextVictimBuffer / NBuffers;
+		}
 	}
 
 	if (num_buf_alloc)
@@ -368,6 +677,32 @@ StrategyNotifyBgWriter(int bgwprocno)
 	SpinLockRelease(&StrategyControl->buffer_strategy_lock);
 }
 
+/*
+ * Strategy hooks for targeted funcs via vtab- cache hit, load page, invalidate page
+ * defs in bufinternals.h
+ * bufmgr wont directly interact with ActiveEviction logic native to freelist
+ */
+void
+StrategyNotifyHit(BufferDesc *buf)
+{
+	if (ActiveEviction && ActiveEviction->notify_hit)
+		ActiveEviction->notify_hit(buf);
+}
+
+void
+StrategyNotifyInsert(BufferDesc *buf)
+{
+	if (ActiveEviction && ActiveEviction->notify_insert)
+		ActiveEviction->notify_insert(buf);
+}
+
+void
+StrategyNotifyInvalidate(BufferDesc *buf)
+{
+	if (ActiveEviction && ActiveEviction->notify_invalidate)
+		ActiveEviction->notify_invalidate(buf);
+}
+
 
 /*
  * StrategyShmemSize
@@ -386,12 +721,10 @@ StrategyShmemSize(void)
 	size = add_size(size, BufTableShmemSize(NBuffers + NUM_BUFFER_PARTITIONS));
 
 	/* size of the shared replacement strategy control block */
-	size = add_size(size, MAXALIGN(sizeof(BufferStrategyControl)));
-
-	/* size of the shared atomic tracking stats. PostgreSQL requires shared memory segments to be properly aligned. 
-	MAXALIGN rounds up to the platform's maximum alignment requirement so there are no boundary issues.*/
-	size = add_size(size, MAXALIGN(sizeof(AtomicStats)));
-
+	//size the new common struct + target struct
+	// size = add_size(size, MAXALIGN(sizeof(BufferStrategyCommon) + sizeof(ClockSweepState)));
+	size = add_size(size, MAXALIGN(sizeof(BufferStrategyCommon) + Max(sizeof(ClockSweepState), 
+		sizeof(SieveState) + 2 * (NBuffers + 1) * sizeof(int32))));
 	return size;
 }
 
@@ -423,11 +756,21 @@ StrategyInitialize(bool init)
 	/*
 	 * Get or create the shared strategy control block
 	 */
-	StrategyControl = (BufferStrategyControl *)
+	// ActiveEviction = &ClockSweepVtable;
+	ActiveEviction = &SieveVtable;
+
+	StrategyControl = (BufferStrategyCommon *)
 		ShmemInitStruct("Buffer Strategy Status",
-						sizeof(BufferStrategyControl),
+						MAXALIGN(sizeof(BufferStrategyCommon) +
+								 Max(sizeof(ClockSweepState),
+									 sizeof(SieveState) +
+									 2 * (NBuffers + 1) * sizeof(int32))),
 						&found);
 
+	
+	ClockSweepCtl = (ClockSweepState *)((char *) StrategyControl + sizeof(BufferStrategyCommon));
+	SieveCtl      = (SieveState *)     ((char *) StrategyControl + sizeof(BufferStrategyCommon));
+	
 	if (!found)
 	{
 		/*
@@ -436,9 +779,6 @@ StrategyInitialize(bool init)
 		Assert(init);
 
 		SpinLockInit(&StrategyControl->buffer_strategy_lock);
-
-		/* Initialize the clock-sweep pointer */
-		pg_atomic_init_u32(&StrategyControl->nextVictimBuffer, 0);
 
 		/* Clear statistics */
 		StrategyControl->completePasses = 0;
@@ -450,17 +790,7 @@ StrategyInitialize(bool init)
 	else
 		Assert(!init);
 
-
-	AtomicStatsPointer = (AtomicStats *)
-		ShmemInitStruct("Atomic Tracking Stats",
-						sizeof(AtomicStats),
-						&atomic_found);
-	if (!atomic_found)
-	{
-		pg_atomic_init_u64(&AtomicStatsPointer->atomic_cache_hits, 0);
-		pg_atomic_init_u64(&AtomicStatsPointer->atomic_cache_misses, 0);
-
-	}	
+	ActiveEviction->initialize(found);
 }
 
 
