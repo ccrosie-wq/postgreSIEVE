@@ -19,10 +19,13 @@ TPS = ExtractFormat("tps", float, " ", 2, "", "Transactions / Second")
 RATIO = ExtractFormat("ratio", float, " ", 1, "", "hits / total")
 DISPLAY_STATS = [TPS] # , RATIO]
 
+
 # indices of these values in the file names (split by _)
 READ = 1
 UPDATE = 2
-ALPHA = 3
+
+# for bar charts
+patterns = ['/', '+'] 
 
 def extract_values(input_file: list[str], attrs: list[ExtractFormat]) -> dict:
     vals = {}
@@ -86,10 +89,17 @@ def main():
         width = 0.25
         multiplier = 0
         fig, ax = plt.subplots(layout='constrained')
+        measure_max = 0
+        pattern = 0
         for attr, measurement in values.items():
             offset = width*multiplier
             rects = ax.bar(x+offset, measurement, width, label=attr)
+            for rect in rects:
+                rect.set_hatch(patterns[pattern])
+                pattern += 1
+                pattern %= len(patterns)
             ax.bar_label(rects, padding=3)
+            measure_max = max(measure_max, measurement)
             multiplier += 1
         
         print(values)
@@ -99,7 +109,7 @@ def main():
         ax.set_ylabel(f'{stat.display_name} ({stat.units})')
         ax.set_xticks(x + width/2, labels)
         ax.legend(loc='upper left', ncols=3)
-        ax.set_ylim(0, 10000)
+        ax.set_ylim(0, measure_max*1.25)
         plt.title(f"{args.title} {stat.name}")
 
         # Display the chart
