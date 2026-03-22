@@ -98,9 +98,9 @@ tackle said problem.
 
 \subsection{Benchmark Explanations}
 
-To benchmark our changes, we are starting with synthetic benchmarks built using Postgres' built-in program \textit{pgbench} (also used for benchmarks in \cite{ACE}). We use simple select and update queries, which can each be independently weighted to change the workload skew.
+To benchmark our changes, we are starting with synthetic benchmarks built using Postgres' built-in program \textit{pgbench} (also used for benchmarks in~\cite{ACE}). We use simple select and update queries, which can each be independently weighted to change the workload skew.
 
-To skew data selection, we draw data from Zipfian and uniform distributions and compare how each algorithm performs in each case.
+To compare the impact of data skew in the queries, we draw query keys from Zipfian and uniform distributions and compare how each algorithm performs in each case.
 
 % =============================================================================
 \section{Results}
