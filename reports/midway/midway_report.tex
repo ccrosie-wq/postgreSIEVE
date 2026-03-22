@@ -46,7 +46,7 @@ The most successful cache eviction policy introduced in recent years is SIEVE \c
 
 \subsection{Problem Statement}
 
-The problem we are exploring is whether or not there are workloads for which SIEVE outperforms other simple eviction policies for the bufferpool in PostgreSQL. PostgreSQL uses the CLOCK algorithm for buffer cache eviction by default, and we implement the following policies in addition: \bad{LIST POLICIES HERE}. We will then explore workloads with different data skews and determine whether SIEVE grants any performance benefits or reduces write amplification.
+The problem we are exploring is whether or not there are workloads for which SIEVE outperforms other simple eviction policies for the bufferpool in PostgreSQL. PostgreSQL uses the CLOCK algorithm for buffer cache eviction by default, and we implement the following policies in addition: LRU, LFU, FIFO \bad{LIST POLICIES HERE}. We will then explore workloads with different data skews and determine whether SIEVE grants any performance benefits or reduces write amplification.
 
 \subsection{Contributions}
 
@@ -84,24 +84,17 @@ We use a new eviction policy framework which routes high level hit, insert, and
 invalidate calls from the buffer manager through to methods specific to each
 eviction strategy. This approach was chosen with the goal of allowing the eviction
 algorithm to be chosen at runtime rather than requiring recompilation of the source
-code, or switching between different versions of the project.
+code, or switching between different versions of the codebase.
 
 \subsection{SIEVE Implementation}
 
 Our SIEVE implementation uses two arrays, SieveNext and SievePrev, to track page
-positions and emulate a linked list, along with two \emph{head} and \emph{hand}
-pointers to manage the SIEVE algorithm. Each array is sized according to the
-number of buffers configured, where the Nth element of SieveNext and SievePrev
+positions and emulate a linked list, along with a \emph{head} pointer to manage the 
+position of the SIEVE algorithm 'sweep'. Each array is sized according to the
+number of buffers configured (NBuffers), where the Nth element of SieveNext and SievePrev
 point to the head and tail respectively. During an insertion or invalidation,
-the \emph{head} pointer is updated, and SieveNext and SievePrev values are
+the \emph{head} is set as needed, and SieveNext and SievePrev values are
 updated to reflect the new ordering of the list.
-
-
-\subsection{Solution Design}
-
-Maybe you're doing a research project that tackles on a particular problem. You
-may want to start introducing a design solution here that explains how you will
-tackle said problem.
 
 \subsection{Benchmark Explanations}
 
