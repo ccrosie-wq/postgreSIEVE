@@ -31,19 +31,7 @@
 }
 
 \begin{abstract}
-    In an world defined by rapid data growth, the demand for near-instantaneous data access has become ubiquitous. 
-    To meet these latency requirements, modern systems extensively employ caching mechanisms to store frequently accessed data, thereby mitigating costly I/O operations. 
-    However, caches are finite have limited memory, that is where cache evection policies come into play. 
-    Eviction policies help determine when data in a cache is no longer needed and removes it creating room for new data. 
-    There are many popular ways of achieving this through different algorithms, some of the most common algorithms are Least Recently Used (LRU), Least Frequently Used (LFU), 
-    First In First Out (FIFO), and many others. These algorithms can be modified to the systems needs to improve on the native behavior of the policy. 
-    Today many database systems leverage these policies to minimize high-latency disk operations and maintain "hot" data in memory. 
-    PostgreSQL is such one that naively implements the Clock Sweep cache eviction policy. 
-    Clock Sweep is a take on the LRU policy and its designed to minimize the overhead of maintaining an ordered list of recently used pages. 
-    For our project we attempt to implement SIEVE, an eviction policy originally designed as a better LRU but for web caches into PostgreSQL. 
-    SIEVE is advantageous due to its lock-less design and its ability to be integrated into existing cache architectures. 
-    Whilst SIEVE was originally made for the web, there could be possible use for it in database systems such as PostgreSQL. 
-    Our experiments benchmark Sieve against other eviction policies using the TPC-C workload and PG-Bench. [Insert quick synopsis of test results - RYAN]
+    The buffer cache is a key data structure in the DBMS that helps reduce unecessary disk I/Os. Eviction policies help determine when data in a cache is no longer needed and removes it, creating room for new data. Some of the most common algorithms are Least Recently Used (LRU), Least Frequently Used (LFU), First In First Out (FIFO), and many others. PostgreSQL uses the CLOCK \bad{citethis} algorithm, a modification of LRU designed to minimize the overhead of maintaining an ordered list of recently used pages. For our project, we implement SIEVE, an eviction policy originally designed as an LRU alternative for web caches, into PostgreSQL. SIEVE is advantageous due to its lock-less design and its ability to be integrated into existing cache architectures. Whilst SIEVE was originally made for the web, there could be possible use for it in database systems such as PostgreSQL. Our experiments benchmark Sieve against other eviction policies using \textit{pgbench}. We find that SIEVE provides little (if any) improvement in terms of throughput and cache-hit ratio over the default buffer cache eviction policy on mixed and skewed workloads.
 \end{abstract}
 
 \maketitle
@@ -54,19 +42,20 @@
 
 \subsection{Motivation}
 
-The most successful cache eviction policy introduced in recent years is SIEVE \cite{Sieve}, an algorithm which is even simpler to implement than LRU. While originally designed for web-caching workloads, it has been found to be useful in many workloads with a high degree of data skew.
+The most successful cache eviction policy introduced in recent years is SIEVE \cite{SIEVE}, an algorithm which is even simpler to implement than LRU. While originally designed for web-caching workloads, it has been found to be useful in many workloads with a high degree of data skew. While the paper introducing SIEVE concedes that it may not perform well for buffer cache workloads due to the presence of range scans, many real-world workloads may have a much higher proportion of point queries for which the benefits of SIEVE can be exploited.
 
 \subsection{Problem Statement}
 
-The problem we are exploring is whether or not there are workloads for which SIEVE outperforms other simple eviction policies for the bufferpool in Postgres. Postgres uses the Clock Sweep algorithm for the bufferpool by default, and we implement the following policies in addition: \bad{LIST POLICIES HERE}. We will then explore workloads with different data skews and determine whether SIEVE grants any performance benefits or reduces write amplification.
+The problem we are exploring is whether or not there are workloads for which SIEVE outperforms other simple eviction policies for the bufferpool in PostgreSQL. PostgreSQL uses the CLOCK algorithm for buffer cache eviction by default, and we implement the following policies in addition: \bad{LIST POLICIES HERE}. We will then explore workloads with different data skews and determine whether SIEVE grants any performance benefits or reduces write amplification.
 
 \subsection{Contributions}
 
-Give your reader a small summary of what exactly you 
+We make the following contributions:
 
-You been reviewing a lot of papers this semester, take a look at what separated
-the good ones from the great ones and analyze what how they introduced their
-problem.
+\begin{itemize}
+    \item We implement a framework in PostgreSQL for implementing and switching between different buffer cache eviction policies at compile time.
+    \item We present results indicating that SIEVE does not offer any significant performance benefits over CLOCK in skewed and mixed workloads.
+\end{itemize}
 
 
 % =============================================================================
@@ -118,12 +107,14 @@ tackle said problem.
 
 To benchmark our changes, we are starting with synthetic benchmarks built using Postgres' built-in program \textit{pgbench} (also used for benchmarks in~\cite{ACE}). We use simple select and update queries, which can each be independently weighted to change the workload skew.
 
-To compare the impact of data skew in the queries, we draw query keys from Zipfian and uniform distributions and compare how each algorithm performs in each case.
+We are interested in evaluating the impact of three variables: workloads skew, data skew, and buffer size. To skew the workload, we give different weights to our select and update scripts in \textit{pgbench}. To skew data access, we compare queries drawn from Zipfian and uniform distributions. Finally, we vary buffer size between 8MB and 128MB.
+
+Because the Shared Computing Cluster (SCC) has routine downtime and does not offer details on the internal hardware, we have chosen to benchmark on a mid-range consumer desktop owned by one of the authors. The system has 32GB of DDR4 RAM, an AMD Ryzen 5600X 6-Core CPU with a base clock speed of 3.7GHZ, and a 240GB SATA SSD.
 
 % =============================================================================
 \section{Results}
 % =============================================================================
-Graphs are basically a requirement here!
+The default bufferpool size in Postgres is 128MB, so we start by evaluating the difference between SIEVE and the default Clocksweep implementation with this buffer size. As shown in Figures \bad{fill this in}, the performance difference between the implementations is negligible for both uniform and Zipfian distributions. Moving to an 8MB bufferpool, we see that the the trend continues.
 
 \begin{figure}[ht]
     \includegraphics[width=3cm]{example-image-a}
@@ -153,7 +144,8 @@ You can also reference your old figures (Figure \ref{fig:filler}) and tables
 \section{Conclusion}
 % =============================================================================
 
-Final thoughts here.
+We have implemented and evaluated SIEVE against Clock Sweep for various synthetic workloads and found that there is little difference in throughput and cache hit ratio. Our next steps are to additionally measure the write amplification of different eviction policies over different workloads and determine if SIEVE is able to pull ahead in any of those scenarios. We would also like to test synthetic workloads include range scans, which should perform worse according to~\cite{SIEVE}.
+
 
 % reference
 {
