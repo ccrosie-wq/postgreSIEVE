@@ -31,16 +31,16 @@ done
 ./set_buffersize.sh -m "$buffer_size"
 
 # Get Initial Misses + Hits
-hits_init=$(psql --csv -f pgscripts/read_hits.sql | awk 'NR==2')
-total_init=$(psql --csv -f pgscripts/read_total.sql | awk 'NR==2')
+hits_init=$(psql --csv -f pgscripts/read_hits.sql postgres | awk 'NR==2')
+total_init=$(psql --csv -f pgscripts/read_total.sql postgres | awk 'NR==2')
 
 # run the benchmark
 bench_file=outputs/$(date -Iseconds)_${read_weight}_${update_weight}.txt
-pgbench -j ${THREADS} -c ${CLIENTS} -s ${SCALE_FACTOR} -T "${time}" -f pgscripts/uniform_select.sql@"${read_weight}" -f pgscripts/uniform_update.sql@"${update_weight}" >> "$bench_file"
+pgbench -j ${THREADS} -c ${CLIENTS} -s ${SCALE_FACTOR} -T "${time}" -f pgscripts/uniform_select.sql@"${read_weight}" -f pgscripts/uniform_update.sql@"${update_weight}" postgres >> "$bench_file"
 
 # Get Ending Misses + Hits
-hits_after=$(psql --csv -f pgscripts/read_hits.sql | awk 'NR==2')
-total_after=$(psql --csv -f pgscripts/read_total.sql | awk 'NR==2')
+hits_after=$(psql --csv -f pgscripts/read_hits.sql postgres | awk 'NR==2')
+total_after=$(psql --csv -f pgscripts/read_total.sql postgres | awk 'NR==2')
 
 hits_delta=$( echo "$hits_after-$hits_init"| bc)
 total_delta=$( echo "$total_after-$total_init"| bc)

@@ -40,16 +40,16 @@ alp=$alpha awk '/\\set alpha/ {$0="\\set alpha "ENVIRON["alp"]""; print; next} {
 chmod -R g+rwx pgscripts/* # ensure permissions are retained so users can still read the file
 
 # Get Initial Misses + Hits
-hits_init=$(psql --csv -f pgscripts/read_hits.sql | awk 'NR==2')
-total_init=$(psql --csv -f pgscripts/read_total.sql | awk 'NR==2')
+hits_init=$(psql --csv -f pgscripts/read_hits.sql postgres | awk 'NR==2')
+total_init=$(psql --csv -f pgscripts/read_total.sql postgres | awk 'NR==2')
 
 # run the benchmark
 bench_file=outputs/$(date -Iseconds)_${read_weight}_${update_weight}_${alpha}.txt
-pgbench -c ${CLIENTS} -j ${THREADS} -s ${SCALE_FACTOR} -T "${time}" -f pgscripts/zipfian_select.sql@"${read_weight}" -f pgscripts/zipfian_update.sql@"${update_weight}" >> "$bench_file"
+pgbench -c ${CLIENTS} -j ${THREADS} -s ${SCALE_FACTOR} -T "${time}" -f pgscripts/zipfian_select.sql@"${read_weight}" -f pgscripts/zipfian_update.sql@"${update_weight}" postgres >> "$bench_file"
 
 # Get Ending Misses + Hits
-hits_after=$(psql --csv -f pgscripts/read_hits.sql | awk 'NR==2')
-total_after=$(psql --csv -f pgscripts/read_total.sql | awk 'NR==2')
+hits_after=$(psql --csv -f pgscripts/read_hits.sql postgres | awk 'NR==2')
+total_after=$(psql --csv -f pgscripts/read_total.sql postgres | awk 'NR==2')
 
 hits_delta=$( echo "$hits_after-$hits_init"| bc)
 total_delta=$( echo "$total_after-$total_init"| bc)
