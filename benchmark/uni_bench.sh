@@ -31,6 +31,7 @@ done
 ./set_buffersize.sh -m "$buffer_size"
 
 # Get Initial Misses + Hits
+psql -f pgscripts/reset_stats.sql
 hits_init=$(psql --csv -f pgscripts/read_hits.sql postgres | awk 'NR==2')
 total_init=$(psql --csv -f pgscripts/read_total.sql postgres | awk 'NR==2')
 
