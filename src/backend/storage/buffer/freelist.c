@@ -66,11 +66,22 @@ typedef struct
     int32  sieve_hand;    // curr eviction hand (buf_id, NBuff == invalid/empty)
     // int32  sieve_head;    // head of 'list' - unused
 	int32  bgw_sync_seq; //track sync pos for bgwriter
-	// Next[] and Prev[] arrs follow
+	// Next[] and Prev[] arrs follow in mem
 } SieveState;
 static SieveState *SieveCtl  = NULL;
 static int32      *SieveNext = NULL;
 static int32      *SievePrev = NULL;
+
+typedef struct
+{
+	int32 lru_head; // fresh usage
+	int32 lru_tail; // last recently used
+	int32 bgw_sync_seq; //we'll see if we need this
+} LRUState;
+static LRUState *LRUCtl = NULL;
+static int32	*LRUList = NULL;
+static int32	*LRUHash = NULL;
+
 
 //hold passthrough refs for policy methods
 typedef struct EvictionVtable
@@ -96,6 +107,14 @@ static BufferDesc *SieveGetBuffer(BufferAccessStrategy strategy, uint64 *buf_sta
 static void SieveNotifyInsert(BufferDesc *buf);
 static void SieveNotifyInvalidate(BufferDesc *buf);
 
+//declare lru funcs
+static Size LRUShmemSize(int n_buffers);
+static void LRUInitialize(bool found);
+static BufferDesc *LRUGetBuffer(BufferAccessStrategy strategy, uint64 *buf_state);
+static void LRUNotifyHit(BufferDesc *buf); //not sure if replacable by internal flags, rm if true
+static void LRUNotifyInsert(BufferDesc *buf);
+static void LRUNotifyInvalidate(BufferDesc *buf);
+
 //cswp specific refs
 static const EvictionVtable ClockSweepVtable = {
     .get_buffer        = ClockSweepGetBuffer,
@@ -114,6 +133,15 @@ static const EvictionVtable SieveVtable = {
 	.notify_invalidate = SieveNotifyInvalidate,
 	.shmem_size        = SieveShmemSize,
 	.initialize        = SieveInitialize,
+};
+
+static const EvictionVtable LRUVTable = {
+	.get_buffer        = LRUGetBuffer,
+	.notify_hit        = LRUNotifyHit,
+	.notify_insert     = LRUNotifyInsert,
+	.notify_invalidate = LRUNotifyInvalidate,
+	.shmem_size        = LRUShmemSize,
+	.initialize        = LRUInitialize,
 };
 
 static const EvictionVtable *ActiveEviction = NULL; //set at strat init
@@ -519,6 +547,54 @@ SieveGetBuffer(BufferAccessStrategy strategy, uint64 *buf_state)
 		//retry
 		trycounter = NBuffers;
 	}
+}
+
+////////////////////////////////////////////////////////////
+//////////////   LRU FUNCS               ///////////////////
+////////////////////////////////////////////////////////////
+
+static Size
+LRUShmemSize(int n_buffers) 
+{
+	//init normal struct
+	//another 'faux-d-link-list' w/ arrs
+	//hash map (is it needed if we already get O(1) access?)
+	return NULL;
+}
+
+static void
+LRUInitialize(bool found)
+{
+	//init vals from state and structs
+	return NULL;
+}
+
+static BufferDesc *
+LRUGetBuffer(BufferAccessStrategy strategy, uint64 *buf_state)
+{
+	//copy more getbuf logic
+	return NULL;
+}
+
+static void 
+LRUNotifyHit(BufferDesc *buf)
+{
+	// move vals in LL
+	return NULL;
+}
+
+static void
+LRUNotifyInsert(BufferDesc *buf)
+{
+	//insert at head, reorder LL
+	return NULL;
+}
+
+static void
+LRUNotifyInvalidate(BufferDesc *buf)
+{
+	// RM from LL, stich list, prob copy most logic from sieve funcs
+	return NULL;
 }
 
 

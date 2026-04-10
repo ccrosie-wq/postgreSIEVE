@@ -1,0 +1,65 @@
+================================================================================
+DIFF ANNOTATIONS: buf_internals.h
+================================================================================
+Context: buf_internals.h is the primary header for buffer management internals.
+It declares the external interface of freelist.c so that bufmgr.c and other
+translation units can call its functions without needing to know about the
+implementation types (EvictionVtable, ClockSweepState, etc.) that live in
+freelist.c.
+================================================================================
+
+
+────────────────────────────────────────────────────────────────────────────────
+CHANGE 1 — Three new extern declarations for the notify wrapper functions
+────────────────────────────────────────────────────────────────────────────────
+
+ extern int	StrategySyncStart(uint32 *complete_passes, uint32 *num_buf_alloc);
+ extern void StrategyNotifyBgWriter(int bgwprocno);
++extern void StrategyNotifyHit(BufferDesc *buf);
++extern void StrategyNotifyInsert(BufferDesc *buf);
++extern void StrategyNotifyInvalidate(BufferDesc *buf);
+
+ extern Size StrategyShmemSize(void);
+ extern void StrategyInitialize(bool init);
+
+ANNOTATION:
+  Purpose:
+    These three declarations expose the lifecycle-event notification functions
+    defined in freelist.c to any translation unit that includes buf_internals.h
+    (primarily bufmgr.c). Without them the linker would reject calls to these
+    functions as undefined symbols.
+
+  Why in buf_internals.h and not bufmgr.h:
+    buf_internals.h is the established home for the internal strategy API
+    (StrategyGetBuffer, StrategyShmemSize, StrategyInitialize, etc.). These
+    notifications are part of that same internal boundary between bufmgr.c and
+    freelist.c, so they belong here alongside the existing Strategy* declarations.
+
+  extern void StrategyNotifyHit(BufferDesc *buf):
+    Declares the function that bufmgr.c calls from PinBuffer() when a buffer
+    is pinned for the first time in an access (cache hit). The implementation
+    in freelist.c dispatches to ActiveEviction->notify_hit(buf). For ClockSweep
+    the slot is NULL (no-op); for SIEVE it will set the buffer's visited bit to 1.
+      - buf: pointer to the BufferDesc of the buffer that was just pinned.
+
+  extern void StrategyNotifyInsert(BufferDesc *buf):
+    Declares the function that bufmgr.c calls from BufferAlloc() after a new
+    page's tag has been installed and the partition lock released. The
+    implementation dispatches to ActiveEviction->notify_insert(buf). For
+    ClockSweep this is a no-op; for SIEVE it will link the buffer at the head
+    of the eviction queue.
+      - buf: pointer to the BufferDesc of the buffer that now holds the newly
+        loaded page.
+
+  extern void StrategyNotifyInvalidate(BufferDesc *buf):
+    Declares the function that bufmgr.c calls from InvalidateBuffer() before
+    ClearBufferTag(), while the buffer header lock is still held. The
+    implementation dispatches to ActiveEviction->notify_invalidate(buf). For
+    ClockSweep this is a no-op; for SIEVE it will splice the buffer out of
+    the doubly-linked eviction list.
+      - buf: pointer to the BufferDesc of the buffer about to be invalidated.
+
+  Placement (between StrategyNotifyBgWriter and StrategyShmemSize):
+    Grouped with the other StrategyNotify* function to keep the header
+    semantically organised: first the sync/notify cluster, then the shmem
+    sizing and initialisation cluster.

@@ -1,0 +1,121 @@
+/*
+ * ============================================================
+ * STEP 1.1 — Multi-algorithm dispatch layer (not yet active)
+ *
+ * When the vtable layer is wired in, BufferStrategyControl above is
+ * replaced by BufferStrategyCommon (the algorithm-agnostic header),
+ * with algorithm-specific state appended in the same shmem block.
+ * StrategyControl becomes (BufferStrategyCommon *); algorithm-local
+ * pointers (ClockSweepCtl, SieveCtl) are set per-backend in
+ * StrategyInitialize().  See analysis.txt §4 for full rationale.
+ *
+ * typedef enum EvictionPolicy
+ * {
+ *     EVICTION_CLOCKSWEEP = 0,   -- default; existing algorithm
+ *     EVICTION_SIEVE      = 1,   -- Zhang et al. 2023
+ * } EvictionPolicy;
+ *
+ * typedef struct
+ * {
+ *     slock_t           buffer_strategy_lock;  -- same role as today
+ *     EvictionPolicy    active_policy;          -- written once at postmaster init
+ *     uint32            completePasses;         -- bgwriter: full traversal count
+ *     pg_atomic_uint32  numBufferAllocs;        -- bgwriter: alloc rate counter
+ *     int               bgwprocno;             -- bgwriter latch (-1 = none)
+ * } BufferStrategyCommon;
+ *
+ * Algorithm-specific structs appended in shmem immediately after
+ * BufferStrategyCommon (sized and initialized via the vtable):
+ *
+ * -- ClockSweep: nextVictimBuffer extracted from the common header
+ * typedef struct { pg_atomic_uint32 nextVictimBuffer; } ClockSweepState;
+ * static ClockSweepState *ClockSweepCtl = NULL;
+ *
+ * -- SIEVE: doubly-linked queue + hand/head indices
+ * typedef struct
+ * {
+ *     int32  sieve_hand;    -- current eviction hand (buf_id; NBuffers = empty)
+ *     int32  sieve_head;    -- insertion head (buf_id; NBuffers = empty)
+ *     -- next[NBuffers+1] and prev[NBuffers+1] follow in shmem
+ * } SieveState;
+ * static SieveState *SieveCtl  = NULL;
+ * static int32      *SieveNext = NULL;   -- process-local pointer into shmem
+ * static int32      *SievePrev = NULL;
+ *
+ * Vtable — one static const instance per algorithm, selected at init:
+ *
+ * typedef struct EvictionVtable
+ * {
+ *     BufferDesc *(*get_buffer)(BufferAccessStrategy, uint64 *);
+ *     void        (*notify_hit)(BufferDesc *);        -- cache hit
+ *     void        (*notify_insert)(BufferDesc *);     -- new page loaded
+ *     void        (*notify_invalidate)(BufferDesc *); -- buffer invalidated
+ *     Size        (*shmem_size)(int n_buffers);
+ *     void        (*initialize)(bool found);
+ * } EvictionVtable;
+ *
+ * static const EvictionVtable ClockSweepVtable = { ... };  -- STEP 2
+ * static const EvictionVtable SieveVtable      = { ... };  -- STEP 3
+ * static const EvictionVtable *ActiveEviction  = NULL;     -- set per-backend
+ * ============================================================
+ */
+
+
+/* ============================================================
+ * Removed stale scaffold blocks — freelist.c cleanup pass
+ * ============================================================ */
+
+/* --- Block A: original BufferStrategyControl struct (superseded by BufferStrategyCommon) ---
+//#########################################
+// typedef struct { slock_t buffer_strategy_lock; pg_atomic_uint32 nextVictimBuffer;
+//   uint32 completePasses; pg_atomic_uint32 numBufferAllocs; int bgwprocno; } BufferStrategyControl;
+// static BufferStrategyControl *StrategyControl = NULL;
+//#########################################
+--- end Block A */
+
+/* --- Block B: SCAFF vtable warning (ClockSweepVtable now populated) ---
+// SCAFF - ClockSweepVtable and SieveVtable below are invalid syntax placeholders.
+// SCAFF - Comment them out until STEP 2 / STEP 3 fill them in with real function pointers.
+// SCAFF - ActiveEviction must remain NULL until StrategyInitialize() assigns it (STEP 1.4).
+--- end Block B */
+
+/* --- Block C: STEP 2.1 migration note (migration complete) ---
+ * STEP 2.1: When ClockSweepState is introduced, StrategyControl->nextVictimBuffer
+ * changes to ClockSweepCtl->nextVictimBuffer (already done).
+--- end Block C */
+
+/* --- Block D: ASCII box borders around ClockSweep vtable functions ---
+// ┌── ClockSweep vtable functions (STEP 2) ──────────────────────────────────┐
+// ... //
+// └──────────────────────────────────────────────────────────────────────────┘
+--- end Block D */
+
+/* --- Block E: StrategyGetBuffer — trycounter REP, STEP 1.5 note, commented clock-sweep loop ---
+	// int trycounter;  // REP - moves into ClockSweepGetBuffer()
+	// STEP 1.5 comment block describing dispatch
+	// FINAL (STEP 1.5): return ActiveEviction->get_buffer(strategy, buf_state);
+	// REP + full commented clock-sweep loop (moved verbatim into ClockSweepGetBuffer)
+--- end Block E */
+
+/* --- Block F: StrategySyncStart — stale SCAFF lines ---
+	// SCAFF - nextVictimBuffer has moved to ClockSweepState; replace the line below with:
+	// SCAFF -   nextVictimBuffer = pg_atomic_read_u32(&ClockSweepCtl->nextVictimBuffer);
+	// nextVictimBuffer = pg_atomic_read_u32(&StrategyControl->nextVictimBuffer);
+--- end Block F */
+
+/* --- Block G: StrategyShmemSize — STEP 1.3 / FINAL / SCAFF comment blocks ---
+	// STEP 1.3 + FINAL + SCAFF multi-line comments, old commented BufferStrategyControl line
+	// size = add_size(size, MAXALIGN(sizeof(BufferStrategyControl)));
+	// REP trailer on live size = add_size(...)
+--- end Block G */
+
+/* --- Block H: StrategyInitialize — STEP 1.4 / FINAL / SCAFF + old ShmemInitStruct + stale inits ---
+	// STEP 1.4 big comment block
+	// FINAL (STEP 1.4): ActiveEviction = resolve_eviction_policy_guc(); ...
+	// SCAFF blocks describing cast + ClockSweepCtl assignment
+	// StrategyControl = (BufferStrategyControl *) ShmemInitStruct(...sizeof(BufferStrategyControl)...);
+	// REP comments on live ShmemInitStruct and ClockSweepCtl assignment
+	// SCAFF - nextVictimBuffer has moved to ClockSweepState:
+	// pg_atomic_init_u32(&StrategyControl->nextVictimBuffer, 0);
+	// pg_atomic_init_u32(&ClockSweepCtl->nextVictimBuffer, 0);  // REP
+--- end Block H */
