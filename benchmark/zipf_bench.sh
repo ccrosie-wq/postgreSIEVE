@@ -10,6 +10,7 @@ update_weight=1
 time=10
 buffer_size=128
 alpha=1.5
+policy="LRU"
 
 while getopts ":r:u:t:a:b:" opt; do
   case $opt in
@@ -18,6 +19,7 @@ while getopts ":r:u:t:a:b:" opt; do
     t) time="$OPTARG" ;;
     a) alpha="$OPTARG" ;;
     b) buffer_size="$OPTARG" ;;
+    p) policy="$OPTARG" ;;
     \?) echo "Invalid option: -$OPTARG" >&2
         echo "Usage:"
         echo "    -r read_weight (default 1)"
@@ -25,6 +27,7 @@ while getopts ":r:u:t:a:b:" opt; do
         echo "    -t time (s) (default 10)"
         echo "    -a alpha (default 1.5)"
         echo "    -b buffer_size (MB) (default 128)"
+        echo "    -p policy (default CLOCK)"
         exit 1
         ;;
   esac
