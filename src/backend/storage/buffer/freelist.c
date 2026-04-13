@@ -74,13 +74,14 @@ static int32      *SievePrev = NULL;
 
 typedef struct
 {
-	int32 lru_head; // fresh usage
-	int32 lru_tail; // last recently used
+	//comm these out, use absolute vals sotred at [NBuff] like SIEVE
+	// int32 lru_head; // fresh usage
+	// int32 lru_tail; // last recently used
 	int32 bgw_sync_seq; //we'll see if we need this
 } LRUState;
 static LRUState *LRUCtl = NULL;
-static int32	*LRUList = NULL;
-static int32	*LRUHash = NULL;
+static int32	*LRUNext = NULL;
+static int32	*LRUPrev = NULL;
 
 
 //hold passthrough refs for policy methods
@@ -114,6 +115,8 @@ static BufferDesc *LRUGetBuffer(BufferAccessStrategy strategy, uint64 *buf_state
 static void LRUNotifyHit(BufferDesc *buf); //not sure if replacable by internal flags, rm if true
 static void LRUNotifyInsert(BufferDesc *buf);
 static void LRUNotifyInvalidate(BufferDesc *buf);
+static void LRUUnlink(int32 buf_id);
+static void LRUInsertMRU(int32 buf_id);
 
 //cswp specific refs
 static const EvictionVtable ClockSweepVtable = {
@@ -135,7 +138,7 @@ static const EvictionVtable SieveVtable = {
 	.initialize        = SieveInitialize,
 };
 
-static const EvictionVtable LRUVTable = {
+static const EvictionVtable LRUVtable = {
 	.get_buffer        = LRUGetBuffer,
 	.notify_hit        = LRUNotifyHit,
 	.notify_insert     = LRUNotifyInsert,
@@ -559,42 +562,191 @@ LRUShmemSize(int n_buffers)
 	//init normal struct
 	//another 'faux-d-link-list' w/ arrs
 	//hash map (is it needed if we already get O(1) access?)
-	return NULL;
+	return sizeof(LRUState) + 2 * (n_buffers + 1) * sizeof(int32);
 }
 
 static void
 LRUInitialize(bool found)
 {
-	//init vals from state and structs
-	return NULL;
+	int i;
+	
+	LRUNext = (int32 *)(LRUCtl + 1); //
+	LRUPrev = LRUNext + (NBuffers + 1);
+
+	if (!found) {
+
+		LRUCtl->bgw_sync_seq = 0;
+
+		LRUNext[NBuffers] = NBuffers - 1; //set head (MRU)
+		LRUPrev[NBuffers] = 0; // set tail (LRU)
+
+		for (i = 0; i < NBuffers; i++) {
+			LRUNext[i] = (i < NBuffers - 1) ? i + 1 : NBuffers; //set up LL in a line to start, avoid err
+			LRUPrev[i] = (i > 0) ? i - 1 : NBuffers;
+		}
+	}
 }
 
 static BufferDesc *
 LRUGetBuffer(BufferAccessStrategy strategy, uint64 *buf_state)
 {
-	//copy more getbuf logic
-	return NULL;
+	int32   candidate_id;
+	int trycounter = NBuffers;
+
+	SpinLockAcquire(&StrategyControl->buffer_strategy_lock);
+
+	candidate_id = LRUPrev[NBuffers];//just get the tail.......
+
+	for (;;) 
+	{
+		BufferDesc *buf;
+		uint64 old_buf_state;
+		uint64 new_buf_state;
+
+		if (candidate_id == NBuffers) {
+			SpinLockRelease(&StrategyControl->buffer_strategy_lock);
+			elog(ERROR, "no buffers in LRU queue");
+		}
+
+		buf = GetBufferDescriptor(candidate_id);
+		old_buf_state = pg_atomic_read_u64(&buf->state);
+
+		if (old_buf_state & BM_LOCKED) {
+			old_buf_state = WaitBufHdrUnlocked(buf);
+			continue;
+		}
+
+		if (BUF_STATE_GET_REFCOUNT(old_buf_state) != 0) {
+			candidate_id = LRUNext[candidate_id]; //advance
+			if (candidate_id == NBuffers) {
+				candidate_id = LRUPrev[NBuffers]; //wrap tail
+			}
+			if (--trycounter == 0) {
+				SpinLockRelease(&StrategyControl->buffer_strategy_lock);
+				elog(ERROR, "no unpinned buffers");
+			}
+			continue;
+		}
+
+		new_buf_state = old_buf_state + BUF_REFCOUNT_ONE; //pin buf
+		if (pg_atomic_compare_exchange_u64(&buf->state, &old_buf_state, new_buf_state)) {
+			LRUUnlink(candidate_id);
+
+			if (strategy != NULL) {
+				AddBufferToRing(strategy, buf);
+			}
+			
+			*buf_state = new_buf_state;
+			TrackNewBufferPin(BufferDescriptorGetBuffer(buf));
+			SpinLockRelease(&StrategyControl->buffer_strategy_lock);
+			return buf;
+		}
+
+		trycounter = NBuffers;
+
+	}
+	// return NULL;
 }
+
+//helpers
+
+static void
+LRUUnlink(int32 buf_id)
+{
+	int32 mru_nb = LRUNext[buf_id]; //toward 'head'
+	int32 lru_nb = LRUPrev[buf_id]; //to tail
+
+	if (mru_nb == NBuffers) {
+		LRUNext[NBuffers] = lru_nb; // id was head, set head to prev
+	}
+	else {
+		LRUPrev[mru_nb] = lru_nb; // mru - (id) --> lru
+	}
+
+	if (lru_nb == NBuffers) {
+		LRUPrev[NBuffers] = mru_nb; //if was tail, set tail to next
+	}
+	else {
+		LRUNext[lru_nb] = mru_nb; // mru <-- (id) -- lru
+	}
+
+	LRUNext[buf_id] = NBuffers; //mark as not in list
+	LRUPrev[buf_id] = NBuffers;
+}
+
+static void
+LRUInsertMRU(int32 buf_id)
+{
+	int32 old_head = LRUNext[NBuffers]; //get curre head
+
+	LRUNext[buf_id] = NBuffers; //mark as head
+	LRUPrev[buf_id] = old_head;
+
+	if (old_head == NBuffers) {
+		LRUPrev[NBuffers] = buf_id; //oldhead = NBuff meant list was empty
+	}
+	else {
+		LRUNext[old_head] = buf_id;
+	}
+	LRUNext[NBuffers] = buf_id; //set global head
+}
+
+//static def on list content checking
+#define LRU_IN_LIST(buf_id) \
+	( LRUNext[buf_id] != NBuffers || \
+	LRUPrev[buf_id] != NBuffers || \
+	LRUNext[NBuffers] == (buf_id) )
+//easy inline checker for list contents
+//add for sieve?
+
+/// end help
 
 static void 
 LRUNotifyHit(BufferDesc *buf)
 {
-	// move vals in LL
-	return NULL;
+	int32 buf_id = buf->buf_id;
+
+	SpinLockAcquire(&StrategyControl->buffer_strategy_lock);
+
+	//if present reset at head
+	if (LRU_IN_LIST(buf_id)) {
+		LRUUnlink(buf_id);
+		LRUInsertMRU(buf_id);
+	}
+
+
+	SpinLockRelease(&StrategyControl->buffer_strategy_lock);
 }
 
 static void
 LRUNotifyInsert(BufferDesc *buf)
 {
-	//insert at head, reorder LL
-	return NULL;
+	int32 buf_id = buf->buf_id;
+
+	SpinLockAcquire(&StrategyControl->buffer_strategy_lock);
+
+	//deal with stales
+	if (LRU_IN_LIST(buf_id)) {
+		LRUUnlink(buf_id);
+	}
+
+	LRUInsertMRU(buf_id);
+
+	SpinLockRelease(&StrategyControl->buffer_strategy_lock);
 }
 
 static void
 LRUNotifyInvalidate(BufferDesc *buf)
 {
-	// RM from LL, stich list, prob copy most logic from sieve funcs
-	return NULL;
+	int32 buf_id = buf->buf_id;
+
+    SpinLockAcquire(&StrategyControl->buffer_strategy_lock);
+
+    if (LRU_IN_LIST(buf_id)) {
+        LRUUnlink(buf_id);
+	}
+
+    SpinLockRelease(&StrategyControl->buffer_strategy_lock);
 }
 
 
@@ -707,6 +859,15 @@ StrategySyncStart(uint32 *complete_passes, uint32 *num_buf_alloc)
 		if (complete_passes)
           *complete_passes = seq / NBuffers;
 	}
+	else if (ActiveEviction == &LRUVtable)
+	{
+		uint32 seq = (uint32) ++LRUCtl->bgw_sync_seq;
+		result = seq % NBuffers;
+
+		if (complete_passes) {
+			*complete_passes = seq / NBuffers;
+		}
+	}
 	else 
 	{
 		nextVictimBuffer = pg_atomic_read_u32(&ClockSweepCtl->nextVictimBuffer);
@@ -799,8 +960,12 @@ StrategyShmemSize(void)
 	/* size of the shared replacement strategy control block */
 	//size the new common struct + target struct
 	// size = add_size(size, MAXALIGN(sizeof(BufferStrategyCommon) + sizeof(ClockSweepState)));
-	size = add_size(size, MAXALIGN(sizeof(BufferStrategyCommon) + Max(sizeof(ClockSweepState), 
-		sizeof(SieveState) + 2 * (NBuffers + 1) * sizeof(int32))));
+	size = add_size(size, MAXALIGN(sizeof(BufferStrategyCommon) + 
+		Max(sizeof(ClockSweepState), 
+			Max(sizeof(SieveState) + 2 * (NBuffers + 1) * sizeof(int32),
+				sizeof(LRUState)   + 2 * (NBuffers + 1) * sizeof(int32)))));
+
+		//change alloc one policy selection in place?
 	return size;
 }
 
@@ -833,19 +998,22 @@ StrategyInitialize(bool init)
 	 * Get or create the shared strategy control block
 	 */
 	// ActiveEviction = &ClockSweepVtable;
-	ActiveEviction = &SieveVtable;
+	// ActiveEviction = &SieveVtable;
+	ActiveEviction = &LRUVtable;
 
 	StrategyControl = (BufferStrategyCommon *)
 		ShmemInitStruct("Buffer Strategy Status",
 						MAXALIGN(sizeof(BufferStrategyCommon) +
 								 Max(sizeof(ClockSweepState),
-									 sizeof(SieveState) +
-									 2 * (NBuffers + 1) * sizeof(int32))),
+									Max(sizeof(SieveState) +
+									 2 * (NBuffers + 1) * sizeof(int32),
+									 sizeof(LRUState)   + 2 * (NBuffers + 1) * sizeof(int32)))),
 						&found);
 
 	
 	ClockSweepCtl = (ClockSweepState *)((char *) StrategyControl + sizeof(BufferStrategyCommon));
 	SieveCtl      = (SieveState *)     ((char *) StrategyControl + sizeof(BufferStrategyCommon));
+	LRUCtl		  = (LRUState *)       ((char *) StrategyControl + sizeof(BufferStrategyCommon));
 	
 	if (!found)
 	{
