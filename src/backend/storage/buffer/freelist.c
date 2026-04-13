@@ -20,7 +20,7 @@
 #include "storage/buf_internals.h"
 #include "storage/bufmgr.h"
 #include "storage/proc.h"
-#include "tracking/atomic_tracking_stats.h"
+#include "tracking/atomic_tracking_stats.h" // remove this no longer needed
 
 #define INT_ACCESS_ONCE(var)	((int)(*((volatile int *)&(var))))
 
@@ -72,6 +72,9 @@ static SieveState *SieveCtl  = NULL;
 static int32      *SieveNext = NULL;
 static int32      *SievePrev = NULL;
 
+
+// Need to make two more states one for LRU and one for LFU.
+
 //hold passthrough refs for policy methods
 typedef struct EvictionVtable
 {
@@ -95,6 +98,9 @@ static void SieveInitialize(bool found);
 static BufferDesc *SieveGetBuffer(BufferAccessStrategy strategy, uint64 *buf_state);
 static void SieveNotifyInsert(BufferDesc *buf);
 static void SieveNotifyInvalidate(BufferDesc *buf);
+
+// declare lru funcs
+// delcare lfu funcs
 
 //cswp specific refs
 static const EvictionVtable ClockSweepVtable = {
@@ -523,10 +529,13 @@ SieveGetBuffer(BufferAccessStrategy strategy, uint64 *buf_state)
 
 
 ////////////////////////////////////////////////////////////
-////////////////////////////////////////////////////////////
+/////////////////	LRU FUNCS						////////
 ////////////////////////////////////////////////////////////
 
 
+////////////////////////////////////////////////////////////
+/////////////////	LFU FUNCS						////////
+////////////////////////////////////////////////////////////
 /*
  * StrategyGetBuffer
  *
