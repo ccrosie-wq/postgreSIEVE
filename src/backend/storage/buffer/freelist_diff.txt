@@ -1,0 +1,730 @@
+================================================================================
+DIFF ANNOTATIONS: freelist.c
+================================================================================
+Context: freelist.c owns all shared eviction state and the StrategyGetBuffer()
+entry point that bufmgr.c calls when it needs a victim buffer. This diff
+refactors the original monolithic BufferStrategyControl struct into a layered
+design: a common header (BufferStrategyCommon) + per-algorithm state blobs,
+dispatched through a C vtable (EvictionVtable).
+================================================================================
+
+
+────────────────────────────────────────────────────────────────────────────────
+CHANGE 1 — EvictionPolicy enum  (new type)
+────────────────────────────────────────────────────────────────────────────────
+
++typedef enum EvictionPolicy
++{
++    EVICTION_CLOCKSWEEP = 0,   //-- default; existing algorithm
++    EVICTION_SIEVE      = 1,   //-- Zhang et al. 2023
++} EvictionPolicy;
+
+ANNOTATION:
+  Purpose:
+    A tag recording which eviction algorithm is active for this PostgreSQL
+    instance. Stored in BufferStrategyCommon.active_policy, written once at
+    postmaster startup and never changed while the server is running.
+
+  Values:
+    EVICTION_CLOCKSWEEP (0): The existing PostgreSQL clock-sweep algorithm.
+      Each buffer has a usage_count (0–5); the hand decrements usage_count on
+      each pass and evicts the first buffer it finds with count=0.
+
+    EVICTION_SIEVE (1): The SIEVE algorithm (Zhang et al., 2023). Maintains an
+      explicit doubly-linked list in recency order. Each buffer has a binary
+      "visited" bit. The eviction hand walks toward the tail; visited bits cause
+      a skip-and-clear rather than decrement. Newly inserted pages go to the
+      head so they are naturally protected for one full traversal.
+
+
+────────────────────────────────────────────────────────────────────────────────
+CHANGE 2 — BufferStrategyCommon struct  (replaces BufferStrategyControl)
+────────────────────────────────────────────────────────────────────────────────
+
+-typedef struct
+-{
+-	slock_t		buffer_strategy_lock;
+-	pg_atomic_uint32 nextVictimBuffer;
+-	uint32		completePasses;
+-	pg_atomic_uint32 numBufferAllocs;
+-	int			bgwprocno;
+-} BufferStrategyControl;
+
++typedef struct
++{
++    slock_t           buffer_strategy_lock;
++    EvictionPolicy    active_policy;
++    uint32            completePasses;
++    pg_atomic_uint32  numBufferAllocs;
++    int               bgwprocno;
++} BufferStrategyCommon;
+
+ANNOTATION:
+  Purpose:
+    The algorithm-independent portion of the shared strategy state. Lives at
+    the start of the shared memory block allocated by StrategyInitialize().
+    Algorithm-specific state (e.g. ClockSweepState) is appended immediately
+    after this struct in the same shmem allocation.
+
+  Why the rename from BufferStrategyControl:
+    "Control" implied a single monolithic struct covering one algorithm.
+    "Common" signals that this struct contains only fields shared across all
+    possible algorithms; per-algorithm fields have been moved to their own
+    structs.
+
+  Field: buffer_strategy_lock  (slock_t — spinlock)
+    A lightweight spinlock that serialises access to the fields below it and
+    to the algorithm-specific state. Acquired for very short critical sections
+    (e.g. reading nextVictimBuffer + completePasses atomically in
+    StrategySyncStart, or updating the SIEVE linked-list pointers).
+
+  Field: active_policy  (EvictionPolicy)
+    Which algorithm is active. Written once at postmaster init; read-only
+    thereafter. Currently unused at runtime (dispatch goes through the vtable
+    pointer ActiveEviction), but stored here so it's visible in shared memory
+    for introspection tools (pg_buffercache extensions etc.).
+
+  Field: completePasses  (uint32)
+    How many full traversals of the buffer array the bgwriter has completed
+    in the current cycle. The bgwriter uses this to throttle I/O: if it has
+    made many passes without finding clean buffers, it knows the pool is under
+    heavy write pressure.
+
+  Field: numBufferAllocs  (pg_atomic_uint32)
+    A counter incremented each time StrategyGetBuffer() is called (i.e. each
+    time any backend needs a victim buffer). The bgwriter reads and resets this
+    counter periodically to estimate the allocation rate and decide how
+    aggressively to pre-clean dirty buffers. Atomic because multiple backends
+    increment it concurrently without holding any lock.
+
+  Field: bgwprocno  (int)
+    The PostgreSQL process number (index into the PGPROC array) of the
+    background writer process, or -1 if no bgwriter has registered. Used by
+    StrategyNotifyBgWriter() to wake the bgwriter via its latch when the pool
+    is running low on clean buffers.
+
+  Removed field: nextVictimBuffer
+    Moved to ClockSweepState.nextVictimBuffer. It is ClockSweep-specific and
+    must not live in the common header.
+
+
+────────────────────────────────────────────────────────────────────────────────
+CHANGE 3 — StrategyControl global pointer  (type change)
+────────────────────────────────────────────────────────────────────────────────
+
+-static BufferStrategyControl *StrategyControl = NULL;
++static BufferStrategyCommon  *StrategyControl = NULL;
+
+ANNOTATION:
+  StrategyControl is a process-local pointer into shared memory. Every backend
+  and the postmaster set this in their own address space during
+  StrategyInitialize(). The underlying shared memory is the same physical region;
+  only the pointer is per-process. The type change reflects that StrategyControl
+  now points to just the common header, not the entire (former) monolithic struct.
+
+
+────────────────────────────────────────────────────────────────────────────────
+CHANGE 4 — ClockSweepState struct + ClockSweepCtl pointer  (new types)
+────────────────────────────────────────────────────────────────────────────────
+
++typedef struct { pg_atomic_uint32 nextVictimBuffer; } ClockSweepState;
++static ClockSweepState *ClockSweepCtl = NULL;
+
+ANNOTATION:
+  Purpose:
+    Isolates the one piece of ClockSweep-private shared state into its own
+    struct. StrategyInitialize() places this struct in shared memory immediately
+    after BufferStrategyCommon (pointer arithmetic: StrategyControl +
+    sizeof(BufferStrategyCommon)). ClockSweepCtl is the process-local pointer to
+    that location.
+
+  Field: nextVictimBuffer  (pg_atomic_uint32)
+    The clock hand. A monotonically increasing counter; the actual buffer index
+    examined on each tick is (nextVictimBuffer % NBuffers). It is never reset to
+    zero directly — instead, when a modulo-wraparound is detected, a CAS sets it
+    to the wrapped value and increments completePasses. Atomic so multiple
+    backends can advance the hand concurrently without a lock.
+
+    Why monotonically increasing instead of wrapping immediately:
+    The atomic fetch-add is cheaper than a lock-guarded modulo assignment.
+    The modulo is computed at read time (ClockSweepTick), so correctness is
+    maintained even when nextVictimBuffer overflows 32 bits.
+
+
+────────────────────────────────────────────────────────────────────────────────
+CHANGE 5 — SieveState struct + SieveCtl/SieveNext/SievePrev pointers  (new)
+────────────────────────────────────────────────────────────────────────────────
+
++typedef struct
++{
++    int32  sieve_hand;
++    int32  sieve_head;
++    //-- next[NBuffers+1] and prev[NBuffers+1] follow in shmem
++} SieveState;
++static SieveState *SieveCtl  = NULL;
++static int32      *SieveNext = NULL;
++static int32      *SievePrev = NULL;
+
+ANNOTATION:
+  Purpose:
+    Placeholder layout for SIEVE's shared state. The actual linked-list arrays
+    are not yet allocated; the comment notes that two int32 arrays of length
+    (NBuffers+1) will follow SieveState in the same shmem block.
+
+  Field: sieve_hand  (int32 — buffer ID)
+    The current position of the eviction hand in the doubly-linked list. When
+    StrategyGetBuffer() is called, the hand walks toward the tail. If it finds
+    a buffer with visited=0 and refcount=0, that buffer is the victim. If it
+    finds visited=1, it clears visited and moves on (similar to decrementing
+    usage_count in ClockSweep). Sentinel value NBuffers means the list is empty.
+
+  Field: sieve_head  (int32 — buffer ID)
+    The most recently inserted buffer — the "young" end of the list. When a new
+    page is loaded (StrategyNotifyInsert), its buffer is linked here. The hand
+    starts near the tail (the "old" end) and only reaches the head after the
+    entire list has been scanned, so recently inserted pages are protected for
+    at least one full traversal. Sentinel value NBuffers means the list is empty.
+
+  Arrays: SieveNext[], SievePrev[]  (int32[NBuffers+1])
+    The doubly-linked list backbone, stored as parallel arrays of buffer IDs.
+    SieveNext[i] is the buffer ID of the buffer after buffer i in the list;
+    SievePrev[i] is the buffer ID of the buffer before i. Index NBuffers is
+    used as the list-end sentinel (a valid buffer ID is 0..NBuffers-1).
+    These are process-local pointers into shared memory, set by SieveInitialize.
+
+  Why int32 instead of pointers:
+    Shared memory is mapped at different virtual addresses in each process.
+    Storing buffer IDs (stable integer indices) instead of virtual-address
+    pointers makes the list portable across all processes.
+
+
+────────────────────────────────────────────────────────────────────────────────
+CHANGE 6 — EvictionVtable struct  (new type — C virtual dispatch table)
+────────────────────────────────────────────────────────────────────────────────
+
++typedef struct EvictionVtable
++{
++    BufferDesc *(*get_buffer)(BufferAccessStrategy, uint64 *);
++    void        (*notify_hit)(BufferDesc *);
++    void        (*notify_insert)(BufferDesc *);
++    void        (*notify_invalidate)(BufferDesc *);
++    Size        (*shmem_size)(int n_buffers);
++    void        (*initialize)(bool found);
++} EvictionVtable;
+
+ANNOTATION:
+  Purpose:
+    A C-style virtual method table (vtable) that decouples the callers of the
+    eviction API (StrategyGetBuffer, StrategyNotifyHit, etc.) from the specific
+    algorithm implementation. Each algorithm provides one static EvictionVtable
+    instance filled with its function pointers. ActiveEviction points to the
+    active instance.
+
+  Field: get_buffer  (BufferDesc *(*)(BufferAccessStrategy, uint64 *))
+    The main eviction function. Called by StrategyGetBuffer() after ring-buffer
+    and freelist checks fail. Must find a buffer with refcount=0, pin it
+    (increment refcount atomically), and return it with its 64-bit state.
+      - BufferAccessStrategy: the caller's ring-buffer strategy (NULL for
+        standard access; non-NULL for bulk-read/write with a private ring).
+      - uint64 *: out-parameter filled with the pinned buffer's state word.
+
+  Field: notify_hit  (void (*)(BufferDesc *))
+    Called on the first pin of a buffer by a backend in a given access. Allows
+    the algorithm to record "this page was recently accessed." SIEVE: sets
+    visited=1. ClockSweep: NULL (the CAS in PinBuffer already bumped
+    usage_count as a side effect).
+
+  Field: notify_insert  (void (*)(BufferDesc *))
+    Called from BufferAlloc() after a new page's tag is installed. Allows the
+    algorithm to link the new buffer into its eviction data structure. SIEVE:
+    calls SieveInsertAtHead(). ClockSweep: NULL (position in the array is the
+    implicit "insertion point").
+
+  Field: notify_invalidate  (void (*)(BufferDesc *))
+    Called from InvalidateBuffer() before the buffer's tag is cleared. Allows
+    the algorithm to remove the buffer from its data structure. SIEVE: calls
+    SieveRemove(). ClockSweep: NULL.
+
+  Field: shmem_size  (Size (*)(int n_buffers))
+    Returns the number of bytes of shared memory this algorithm needs beyond
+    BufferStrategyCommon. Called by StrategyShmemSize() to compute the total
+    shmem reservation at startup.
+
+  Field: initialize  (void (*)(bool found))
+    Initialises the algorithm's portion of shared memory. Called by
+    StrategyInitialize() after ShmemInitStruct() returns.
+      - found (bool): true if the shmem block already existed (postmaster
+        restart); false if it was freshly created. Algorithms should only zero-
+        initialise their state when found=false.
+
+
+────────────────────────────────────────────────────────────────────────────────
+CHANGE 7 — ClockSweepVtable + forward declarations  (new)
+────────────────────────────────────────────────────────────────────────────────
+
++static Size ClockSweepShmemSize(int n_buffers);
++static void ClockSweepInitialize(bool found);
++static BufferDesc *ClockSweepGetBuffer(BufferAccessStrategy strategy, uint64 *buf_state);
++
++static const EvictionVtable ClockSweepVtable = {
++    .get_buffer        = ClockSweepGetBuffer,
++    .notify_hit        = NULL,
++    .notify_insert     = NULL,
++    .notify_invalidate = NULL,
++    .shmem_size        = ClockSweepShmemSize,
++    .initialize        = ClockSweepInitialize,
++};
+
+ANNOTATION:
+  Forward declarations:
+    C requires a declaration before use. The vtable struct is defined before the
+    function bodies, so forward declarations are needed to fill in the function
+    pointers.
+
+  ClockSweepVtable:
+    The concrete vtable instance for the ClockSweep algorithm. Declared const
+    because it is a compile-time constant; the compiler may place it in read-
+    only memory.
+
+  Why notify_hit/insert/invalidate are NULL:
+    - notify_hit: ClockSweep records access frequency via usage_count, which is
+      already incremented inside the PinBuffer CAS loop as a side effect of
+      setting BUF_USAGECOUNT_ONE. No separate notification is needed.
+    - notify_insert: ClockSweep's "queue" is the fixed buffer array. A newly
+      loaded buffer simply sits at its index; the hand will reach it on the next
+      pass. No explicit insertion step exists.
+    - notify_invalidate: The circular sweep tolerates gaps — an invalidated
+      buffer has usage_count=0 and refcount=0, so the hand evicts it
+      immediately on the next pass without any special handling.
+
+
+────────────────────────────────────────────────────────────────────────────────
+CHANGE 8 — ActiveEviction global pointer  (new)
+────────────────────────────────────────────────────────────────────────────────
+
++static const EvictionVtable *ActiveEviction = NULL;
+
+ANNOTATION:
+  Process-local pointer to the active algorithm's vtable. Set to
+  &ClockSweepVtable (or &SieveVtable in the future) inside StrategyInitialize()
+  before any eviction calls can be made.
+
+  Why process-local (not in shared memory):
+    The vtable contains function pointers, which are virtual addresses that
+    differ between processes (ASLR, different binary load addresses). Each
+    process sets ActiveEviction independently to its own copy of the same
+    static constant. The actual eviction algorithm selection is in shared
+    memory (BufferStrategyCommon.active_policy), but the dispatch pointer is
+    per-process.
+
+
+────────────────────────────────────────────────────────────────────────────────
+CHANGE 9 — ClockSweepTick(): nextVictimBuffer access moved to ClockSweepCtl
+────────────────────────────────────────────────────────────────────────────────
+
+-		pg_atomic_fetch_add_u32(&StrategyControl->nextVictimBuffer, 1);
++		pg_atomic_fetch_add_u32(&ClockSweepCtl->nextVictimBuffer, 1);
+
+ ...
+
+-			success = pg_atomic_compare_exchange_u32(&StrategyControl->nextVictimBuffer,
++			success = pg_atomic_compare_exchange_u32(&ClockSweepCtl->nextVictimBuffer,
+ 													 &expected, wrapped);
+ 			if (success)
+ 				StrategyControl->completePasses++;
+
+ANNOTATION:
+  nextVictimBuffer has moved from BufferStrategyControl (now gone) to
+  ClockSweepState, so all accesses must go through ClockSweepCtl instead of
+  StrategyControl.
+
+  Variable: victim  (pg_atomic_fetch_add result, uint32)
+    The raw (un-wrapped) value of the clock hand before this tick's increment.
+    The actual buffer index is (victim % NBuffers), computed below in
+    ClockSweepTick().
+
+  Variable: expected  (uint32)
+    The value ClockSweepTick() expects the hand to still hold when it attempts
+    the CAS-based wraparound. If another backend already advanced the hand past
+    the expected value (a race), the CAS fails and the loop retries.
+
+  Variable: wrapped  (uint32)
+    expected % NBuffers — the target value after wraparound. If the CAS
+    succeeds, the hand resets to wrapped and completePasses is incremented.
+
+  Note: completePasses still lives in StrategyControl (BufferStrategyCommon)
+  because it is algorithm-independent bgwriter statistics.
+
+
+────────────────────────────────────────────────────────────────────────────────
+CHANGE 10 — ClockSweepShmemSize()  (new function)
+────────────────────────────────────────────────────────────────────────────────
+
++static Size
++ClockSweepShmemSize(int n_buffers)
++{
++    return sizeof(ClockSweepState);
++}
+
+ANNOTATION:
+  The vtable shmem_size slot for ClockSweep. Returns how many bytes beyond
+  BufferStrategyCommon ClockSweep needs: just sizeof(ClockSweepState) = 4 bytes
+  for the nextVictimBuffer atomic.
+
+  Parameter: n_buffers  (int)
+    Passed by StrategyShmemSize() in case an algorithm's per-algorithm overhead
+    scales with the pool size (e.g. SIEVE needs 2 × NBuffers × sizeof(int32)
+    for its next/prev arrays). ClockSweep's overhead is constant so the
+    parameter is unused here.
+
+
+────────────────────────────────────────────────────────────────────────────────
+CHANGE 11 — ClockSweepInitialize()  (new function)
+────────────────────────────────────────────────────────────────────────────────
+
++static void
++ClockSweepInitialize(bool found)
++{
++    if (!found)
++        pg_atomic_init_u32(&ClockSweepCtl->nextVictimBuffer, 0);
++}
+
+ANNOTATION:
+  The vtable initialize slot for ClockSweep. Called by StrategyInitialize()
+  after the shared memory block is allocated and ClockSweepCtl is pointed at
+  the correct offset within it.
+
+  Parameter: found  (bool)
+    Passed through from ShmemInitStruct(). false = the shmem block was freshly
+    created (first postmaster start); true = it already existed (postmaster
+    restart, shared memory survives across restart on some platforms). Only
+    initialise to 0 when found=false; on a restart the hand position is already
+    meaningful and should not be reset.
+
+  pg_atomic_init_u32:
+    PostgreSQL's wrapper around platform-specific atomic initialisation. Must
+    be called before any atomic read/write/CAS on the variable. Equivalent to
+    a plain write here but required by the abstraction layer.
+
+
+────────────────────────────────────────────────────────────────────────────────
+CHANGE 12 — ClockSweepGetBuffer()  (new function — extracted from StrategyGetBuffer)
+────────────────────────────────────────────────────────────────────────────────
+
++static BufferDesc *
++ClockSweepGetBuffer(BufferAccessStrategy strategy, uint64 *buf_state)
++{
++    BufferDesc *buf;
++    int         trycounter = NBuffers;
++
++    for (;;)
++    {
++        uint64  old_buf_state;
++        uint64  local_buf_state;
++
++        buf = GetBufferDescriptor(ClockSweepTick());
++
++        old_buf_state = pg_atomic_read_u64(&buf->state);
++        for (;;)
++        {
++            local_buf_state = old_buf_state;
++
++            if (BUF_STATE_GET_REFCOUNT(local_buf_state) != 0)
++            {
++                if (--trycounter == 0)
++                    elog(ERROR, "no unpinned buffers available");
++                break;
++            }
++
++            if (unlikely(local_buf_state & BM_LOCKED))
++            {
++                old_buf_state = WaitBufHdrUnlocked(buf);
++                continue;
++            }
++
++            if (BUF_STATE_GET_USAGECOUNT(local_buf_state) != 0)
++            {
++                local_buf_state -= BUF_USAGECOUNT_ONE;
++                if (pg_atomic_compare_exchange_u64(&buf->state,
++                                                   &old_buf_state,
++                                                   local_buf_state))
++                {
++                    trycounter = NBuffers;
++                    break;
++                }
++            }
++            else
++            {
++                local_buf_state += BUF_REFCOUNT_ONE;
++                if (pg_atomic_compare_exchange_u64(&buf->state,
++                                                   &old_buf_state,
++                                                   local_buf_state))
++                {
++                    if (strategy != NULL)
++                        AddBufferToRing(strategy, buf);
++                    *buf_state = local_buf_state;
++                    TrackNewBufferPin(BufferDescriptorGetBuffer(buf));
++                    return buf;
++                }
++            }
++        }
++    }
++}
+
+ANNOTATION:
+  This is the original 84-line clock-sweep eviction loop moved verbatim out of
+  StrategyGetBuffer() and into its own static function so it can be referenced
+  as a vtable function pointer.
+
+  Overall structure:
+    Outer loop: advances the clock hand one tick per iteration (ClockSweepTick),
+    inspects the buffer at that position.
+    Inner CAS loop: retries the state update on the same buffer if a concurrent
+    modification races in before the CAS succeeds.
+
+  Variable: trycounter  (int, initialised to NBuffers)
+    Counts down the number of buffers remaining to inspect. Decremented each
+    time a pinned buffer is skipped. If trycounter reaches 0, every buffer in
+    the pool is currently pinned (an extremely rare error condition). When a
+    buffer's usage_count is successfully decremented (second-chance given),
+    trycounter resets to NBuffers because the pool state changed and a full
+    re-scan is warranted.
+
+  Variable: old_buf_state  (uint64)
+    The atomic snapshot of buf->state read at the start of the inner loop
+    iteration. Serves as the "expected" value in the CAS. Re-read via
+    WaitBufHdrUnlocked() when the header lock bit (BM_LOCKED) is set.
+
+  Variable: local_buf_state  (uint64)
+    A local scratch copy of old_buf_state. Modifications (decrement
+    usage_count, increment refcount) are made here before being proposed to the
+    CAS. If the CAS fails (another thread changed buf->state since old_buf_state
+    was read), we reload old_buf_state and recompute local_buf_state.
+
+  Macro: BUF_STATE_GET_REFCOUNT(state)
+    Extracts the 18-bit reference count from the packed 64-bit state word.
+    Nonzero means at least one backend currently holds the buffer pinned;
+    such buffers cannot be evicted.
+
+  Macro: BM_LOCKED
+    A flag bit in the state word indicating that another process holds the
+    buffer header's content lock (a short-duration exclusive lock used for
+    tag changes and I/O). The inner loop must not proceed while this bit is set.
+
+  Function: WaitBufHdrUnlocked(buf)
+    Spins on buf->state until BM_LOCKED clears, then returns the new state.
+    Returns the fresh state so the inner loop can restart without a redundant
+    atomic read.
+
+  Macro: BUF_STATE_GET_USAGECOUNT(state)
+    Extracts the 4-bit usage_count field (0–5) from the packed state.
+    Nonzero means the buffer was recently accessed; give it a second chance by
+    decrementing usage_count and moving on.
+
+  Macro: BUF_USAGECOUNT_ONE
+    The numeric constant that represents "+1 usage_count" within the packed
+    state word. Because usage_count is not at bit position 0, this is not
+    simply the integer 1. Subtracting BUF_USAGECOUNT_ONE decrements the count.
+
+  Macro: BUF_REFCOUNT_ONE
+    The numeric constant that represents "+1 refcount" within the packed state
+    word. Adding it atomically pins the buffer (claims one reference).
+
+  Function: pg_atomic_compare_exchange_u64(&buf->state, &old_buf_state, local_buf_state)
+    Atomic compare-and-swap: if buf->state == old_buf_state, replace it with
+    local_buf_state and return true. Otherwise load the current value into
+    old_buf_state and return false. On false, the inner loop retries with the
+    updated old_buf_state.
+
+  Parameter: strategy  (BufferAccessStrategy)
+    The caller's ring-buffer strategy object, or NULL for standard access.
+    Bulk operations (VACUUM, sequential scans) pass a non-NULL strategy to
+    keep their buffers in a private ring, avoiding pollution of the main pool.
+    AddBufferToRing() registers the victim with that ring.
+
+  Function: AddBufferToRing(strategy, buf)
+    Links the newly evicted buffer into the caller's ring buffer so subsequent
+    allocations by the same operation reuse the same small set of buffers in
+    rotation rather than evicting globally.
+
+  Output parameter: *buf_state
+    Filled with local_buf_state at the moment of successful pin. Returned so
+    the caller (GetVictimBuffer → BufferAlloc) can inspect flags (BM_VALID,
+    BM_TAG_VALID) without a second atomic read.
+
+  Function: TrackNewBufferPin(BufferDescriptorGetBuffer(buf))
+    Records the new pin in per-backend wait-event and statistics structures.
+    BufferDescriptorGetBuffer converts a BufferDesc* to the 1-based buffer ID
+    integer expected by the tracking infrastructure.
+
+
+────────────────────────────────────────────────────────────────────────────────
+CHANGE 13 — StrategyGetBuffer(): clock-sweep loop replaced by vtable call
+────────────────────────────────────────────────────────────────────────────────
+
+-	int			trycounter;
+ ...
+-	/* Use the "clock sweep" algorithm to find a free buffer */
+-	trycounter = NBuffers;
+-	for (;;) { ... 84 lines ... }
++	return ActiveEviction->get_buffer(strategy, buf_state);
+
+ANNOTATION:
+  The 84-line clock-sweep loop is removed from StrategyGetBuffer() entirely.
+  It now lives in ClockSweepGetBuffer() and is reached only via the vtable.
+  The local variable trycounter is also removed because it is now internal to
+  ClockSweepGetBuffer().
+
+  ActiveEviction->get_buffer:
+    Dereferences the vtable pointer and calls the algorithm's eviction function.
+    For ClockSweep this is ClockSweepGetBuffer(); for SIEVE it will be
+    SieveGetBuffer(). The caller (StrategyGetBuffer) does not need to know which.
+
+  What StrategyGetBuffer() still does before this call:
+    1. Checks the caller's ring buffer (if strategy != NULL) for a readily
+       reusable buffer.
+    2. Checks the shared freelist (buffers freed by other backends).
+    3. Wakes the bgwriter if the pool is running low.
+    4. Increments numBufferAllocs.
+    Only if all of those fail does it call into the eviction algorithm.
+
+
+────────────────────────────────────────────────────────────────────────────────
+CHANGE 14 — StrategySyncStart(): nextVictimBuffer read moved to ClockSweepCtl
+────────────────────────────────────────────────────────────────────────────────
+
+-	nextVictimBuffer = pg_atomic_read_u32(&StrategyControl->nextVictimBuffer);
++	nextVictimBuffer = pg_atomic_read_u32(&ClockSweepCtl->nextVictimBuffer);
+
+ANNOTATION:
+  StrategySyncStart() is called by the bgwriter to determine where the clock
+  hand is, so the bgwriter can start pre-cleaning buffers ahead of the hand.
+  The read is done under buffer_strategy_lock to obtain a consistent pair of
+  (nextVictimBuffer, completePasses). This is the only change needed here —
+  the spinlock and completePasses are still accessed through StrategyControl.
+
+
+────────────────────────────────────────────────────────────────────────────────
+CHANGE 15 — StrategyNotifyHit/Insert/Invalidate wrappers  (new public functions)
+────────────────────────────────────────────────────────────────────────────────
+
++void
++StrategyNotifyHit(BufferDesc *buf)
++{
++	if (ActiveEviction && ActiveEviction->notify_hit)
++		ActiveEviction->notify_hit(buf);
++}
++
++void
++StrategyNotifyInsert(BufferDesc *buf)
++{
++	if (ActiveEviction && ActiveEviction->notify_insert)
++		ActiveEviction->notify_insert(buf);
++}
++
++void
++StrategyNotifyInvalidate(BufferDesc *buf)
++{
++	if (ActiveEviction && ActiveEviction->notify_invalidate)
++		ActiveEviction->notify_invalidate(buf);
++}
+
+ANNOTATION:
+  Purpose:
+    Public API surface for bufmgr.c to notify the eviction algorithm about
+    cache lifecycle events without knowing which algorithm is active. bufmgr.c
+    calls these three functions; freelist.c dispatches through the vtable.
+
+  Null guards (if ActiveEviction && ActiveEviction->notify_XXX):
+    Double protection: ActiveEviction itself should never be NULL after
+    StrategyInitialize() but the guard prevents crashes during early startup.
+    The vtable slot can be NULL (as it is for all three ClockSweep slots),
+    making the call a safe no-op without requiring branches in the caller.
+
+  Why these are wrappers rather than exposing ActiveEviction directly:
+    ActiveEviction is a static (file-scope) variable in freelist.c. Exposing it
+    would require exporting the EvictionVtable type in a header and coupling
+    bufmgr.c to the internal dispatch mechanism. Thin wrappers keep the
+    algorithm internals encapsulated in freelist.c.
+
+
+────────────────────────────────────────────────────────────────────────────────
+CHANGE 16 — StrategyShmemSize(): size calculation updated
+────────────────────────────────────────────────────────────────────────────────
+
+-	size = add_size(size, MAXALIGN(sizeof(BufferStrategyControl)));
++	size = add_size(size, MAXALIGN(sizeof(BufferStrategyCommon) + sizeof(ClockSweepState)));
+
+ANNOTATION:
+  StrategyShmemSize() is called at server startup to tell PostgreSQL how much
+  shared memory to reserve. The old single struct is now two structs in one
+  contiguous block.
+
+  sizeof(BufferStrategyCommon) + sizeof(ClockSweepState):
+    Common header (spinlock + policy + stats + bgwprocno) + clock hand.
+    These are concatenated in one ShmemInitStruct call, so the total size must
+    cover both.
+
+  MAXALIGN:
+    Rounds up to the platform's maximum alignment requirement (typically 8
+    bytes on 64-bit). Required by PostgreSQL's shmem allocator to ensure the
+    next allocation starts at a properly aligned address.
+
+  Future note: when SIEVE is enabled, this line will need to add
+  sizeof(SieveState) + 2 * NBuffers * sizeof(int32) for the next/prev arrays.
+
+
+────────────────────────────────────────────────────────────────────────────────
+CHANGE 17 — StrategyInitialize(): wiring the new layout together
+────────────────────────────────────────────────────────────────────────────────
+
++	ActiveEviction = &ClockSweepVtable;
++
+-	StrategyControl = (BufferStrategyControl *)
++	StrategyControl = (BufferStrategyCommon *)
+ 		ShmemInitStruct("Buffer Strategy Status",
+-						sizeof(BufferStrategyControl),
++						MAXALIGN(sizeof(BufferStrategyCommon) + sizeof(ClockSweepState)),
+ 						&found);
++
++	ClockSweepCtl = (ClockSweepState *)((char *) StrategyControl + sizeof(BufferStrategyCommon));
+
+ 	if (!found)
+ 	{
+ 		SpinLockInit(&StrategyControl->buffer_strategy_lock);
+-		pg_atomic_init_u32(&StrategyControl->nextVictimBuffer, 0);
+ 		StrategyControl->completePasses = 0;
+ 		pg_atomic_init_u32(&StrategyControl->numBufferAllocs, 0);
+ 		StrategyControl->bgwprocno = -1;
+ 	}
+ 	else
+ 		Assert(!init);
++
++	ActiveEviction->initialize(found);
+
+ANNOTATION:
+  ActiveEviction = &ClockSweepVtable:
+    Set the algorithm dispatch pointer before ShmemInitStruct so that
+    ClockSweepShmemSize (called indirectly via StrategyShmemSize earlier) and
+    ClockSweepInitialize (called at the end) use consistent state.
+
+  ShmemInitStruct("Buffer Strategy Status", ..., &found):
+    PostgreSQL shared-memory allocator. The name string is used as a key to
+    locate the region on postmaster restart. found is set to true if the region
+    already existed, false if it was freshly created.
+
+  ClockSweepCtl = (ClockSweepState *)((char *) StrategyControl + sizeof(BufferStrategyCommon)):
+    Pointer arithmetic to position ClockSweepCtl at the byte immediately
+    following BufferStrategyCommon within the same shmem block. The cast to
+    (char *) is required because C forbids pointer arithmetic on void* and
+    struct* increments by sizeof(struct), not by 1 byte.
+
+  Removal of pg_atomic_init_u32(&StrategyControl->nextVictimBuffer, 0):
+    This initialisation has moved to ClockSweepInitialize(), which is now the
+    authoritative place to set up ClockSweep-specific state.
+
+  ActiveEviction->initialize(found):
+    Calls the algorithm's initialise function with the found flag. For
+    ClockSweep this is ClockSweepInitialize(found). The call is placed after the
+    !found block so that the common fields (spinlock, completePasses, etc.) are
+    already set up when the algorithm-specific initialiser runs.

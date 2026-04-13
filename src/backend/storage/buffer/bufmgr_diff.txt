@@ -1,0 +1,190 @@
+================================================================================
+DIFF ANNOTATIONS: bufmgr.c
+================================================================================
+Context: bufmgr.c is the top-level buffer manager. It calls into freelist.c
+for eviction decisions. These three changes add hook call sites — the actual
+calls are commented out (left as stubs) because freelist.c's notify functions
+aren't wired to SIEVE logic yet.
+================================================================================
+
+
+────────────────────────────────────────────────────────────────────────────────
+CHANGE 1 of 3 — BufferAlloc(): STEP 4.2  (notify on new page load)
+Location: ~line 2246, inside BufferAlloc(), after LWLockRelease(newPartitionLock)
+────────────────────────────────────────────────────────────────────────────────
+
+ 	LWLockRelease(newPartitionLock);
+
++	// FINAL (STEP 4.2): tag is now installed and partition lock released;
++	// enqueue the victim buffer at the head of the eviction queue so the
++	// new page has a full traversal of protection before it can be evicted.
++	// ClockSweep: StrategyNotifyInsert is a no-op (position in array is implicit).
++	// SIEVE: SieveInsertAtHead() links victim_buf_hdr into the doubly-linked queue.
++	//   StrategyNotifyInsert(victim_buf_hdr);
+
+ANNOTATION:
+  Context in BufferAlloc():
+    BufferAlloc() is called when a page needs to be brought from disk into the
+    buffer pool. Before this point, the following has already happened:
+      1. A victim buffer was selected by StrategyGetBuffer() and its old contents
+         were written out (if dirty).
+      2. The new page's tag (relation, fork, block number) was installed into the
+         victim buffer's header.
+      3. The partition lock that guards the shared buffer hash table was released.
+
+  Why this is the right insertion point:
+    The new page's identity is now fully committed and visible to other backends.
+    SIEVE's invariant is that every buffer in the pool is linked into its
+    doubly-linked eviction queue in recency order. The insertion must happen
+    after the tag is stable so the queue node represents a real, named page.
+
+  Variable: victim_buf_hdr
+    The BufferDesc (buffer descriptor) of the buffer that was just evicted and
+    now holds the incoming page. BufferDesc is the per-buffer metadata struct
+    (tag, state, content_lock, etc.). victim_buf_hdr is the node to be linked
+    into SIEVE's queue.
+
+  ClockSweep behaviour:
+    ClockSweep has no explicit queue — it sweeps a fixed circular array.
+    Insertion position is implicit (the buffer lives at its array index forever),
+    so StrategyNotifyInsert is a no-op for ClockSweep.
+
+  SIEVE behaviour (future):
+    SieveInsertAtHead() will take victim_buf_hdr and prepend it to the
+    doubly-linked list maintained in SieveNext[]/SievePrev[], updating
+    SieveCtl->sieve_head. The newly loaded page starts at the "protected" end
+    of the queue (head), so the eviction hand must pass it once before it
+    becomes eligible for eviction.
+
+
+────────────────────────────────────────────────────────────────────────────────
+CHANGE 2 of 3 — InvalidateBuffer(): STEP 4.3  (notify on buffer invalidation)
+Location: ~line 2349, inside InvalidateBuffer() retry block, before tag clear
+────────────────────────────────────────────────────────────────────────────────
+
+ 	 * Clear out the buffer's tag and flags.  We must do this to ensure that
+ 	 * linear scans of the buffer array don't think the buffer is valid.
+ 	 */
+
++	// FINAL (STEP 4.3): unlink the buffer from the eviction queue before its tag
++	// is cleared.  Must happen here, under the buffer header lock, so the eviction
++	// algorithm can safely identify and unlink this node.
++	// ClockSweep: StrategyNotifyInvalidate is a no-op (circular array tolerates gaps).
++	// SIEVE: SieveRemove() unlinks under buffer_strategy_lock — acquire that spinlock
++	// inside SieveRemove() after the buffer header lock already held here.
++	//   StrategyNotifyInvalidate(buf);
+
+ 	oldFlags = buf_state & BUF_FLAG_MASK;
+ 	ClearBufferTag(&buf->tag);
+
+ANNOTATION:
+  Context in InvalidateBuffer():
+    InvalidateBuffer() forces a buffer out of the pool (e.g., when a relation is
+    dropped). It acquires the buffer header lock, then clears the tag and flags.
+    The "retry:" label above this block means the whole sequence re-runs if
+    another backend raced in and changed the buffer.
+
+  Why before ClearBufferTag():
+    SIEVE's SieveRemove() needs buf->tag to still be valid to identify which
+    buffer is being removed (e.g., for assertions or hash lookups). Once
+    ClearBufferTag() zeros the tag, the buffer looks like an anonymous free slot.
+    The unlink must therefore happen while the buffer header lock is held and
+    before the tag is wiped.
+
+  Locking note:
+    The buffer header lock is already held here. SieveRemove() will need to
+    additionally acquire buffer_strategy_lock (the spinlock in BufferStrategyCommon)
+    to safely modify the SieveNext[]/SievePrev[] arrays. This is a deliberate
+    nested lock acquire — it is safe because buffer_strategy_lock is always taken
+    after the buffer header lock, never the reverse.
+
+  Variable: buf
+    The BufferDesc* of the buffer being invalidated (the node to remove from
+    the eviction queue).
+
+  Variable: buf_state
+    The 64-bit packed atomic state field read earlier in InvalidateBuffer().
+    Encodes refcount (18 bits), usage_count (4 bits), flags (12 bits), and
+    lock state. It is the snapshot used to detect races via the retry loop.
+
+  Variable: oldFlags
+    The flag bits extracted from buf_state via BUF_FLAG_MASK before they are
+    cleared. Used later in InvalidateBuffer() to check BM_TAG_VALID etc.
+
+  Variable: BUF_FLAG_MASK
+    A bitmask that isolates the 12 flag bits within the 64-bit state word.
+    Applying it discards refcount and usage_count, leaving only status flags.
+
+  ClockSweep behaviour:
+    ClockSweep's circular array sweep simply skips over gaps where a buffer has
+    been invalidated (refcount=0, usage_count=0 → immediately evictable again).
+    No explicit removal step is needed.
+
+  SIEVE behaviour (future):
+    SieveRemove() must splice out the doubly-linked list node for this buffer,
+    adjusting the next/prev pointers of its neighbours and updating sieve_hand
+    or sieve_head if they pointed to this buffer.
+
+
+────────────────────────────────────────────────────────────────────────────────
+CHANGE 3 of 3 — PinBuffer(): STEP 4.1  (notify on cache hit)
+Location: ~line 3252, inside PinBuffer(), in the "first pin" CAS success branch
+────────────────────────────────────────────────────────────────────────────────
+
+ 			result = (buf_state & BM_VALID) != 0;
+
+ 			TrackNewBufferPin(b);
+
++			// FINAL (STEP 4.1): notify the active eviction algorithm of a cache hit.
++			// First pin by this backend = cache hit from the algorithm's perspective.
++			// ClockSweep: StrategyNotifyHit is a no-op (notify_hit = NULL; usage_count
++			// already incremented in the CAS above).  SIEVE: sets visited = 1.
++			//   StrategyNotifyHit(buf);
+
+ 			break;
+
+ANNOTATION:
+  Context in PinBuffer():
+    PinBuffer() is called by every backend that wants to access a page already
+    present in the buffer pool. It increments the buffer's refcount using a CAS
+    (compare-and-swap) on the 64-bit state field. This particular branch runs
+    when the backend is the first caller to pin this buffer in its current
+    access cycle — that is the definition of a cache hit for eviction purposes.
+
+  Why this is the cache-hit notification site:
+    The CAS that bumped refcount has already succeeded at this point. The page
+    is guaranteed to stay in memory for the duration of the pin. This is the
+    earliest safe moment to record "this page was recently accessed."
+
+  Variable: buf
+    The BufferDesc* of the buffer being pinned. Passed to StrategyNotifyHit so
+    the eviction algorithm can record the hit against the right node.
+
+  Variable: b
+    The buffer ID (integer index 1..NBuffers) of the same buffer. Used by
+    TrackNewBufferPin() for statistics/wait-event tracking. Distinct from buf
+    (the descriptor pointer) — both identify the same buffer.
+
+  Variable: buf_state
+    The 64-bit state word snapshot read before the CAS. After the CAS, the live
+    state has refcount incremented by BUF_REFCOUNT_ONE.
+
+  Variable: BM_VALID
+    A flag bit in the state word indicating the buffer holds a valid, fully
+    loaded page. result is set to nonzero if this bit is set.
+
+  Variable: result
+    Return value of PinBuffer(): true if the buffer was valid at pin time, false
+    if the buffer was being loaded concurrently and the caller must wait for I/O.
+
+  ClockSweep behaviour:
+    ClockSweep records cache hits implicitly: the CAS in PinBuffer() already
+    increments usage_count (up to BM_MAX_USAGE_COUNT=5) as part of the same
+    atomic operation. StrategyNotifyHit is NULL in ClockSweepVtable — no
+    additional action needed.
+
+  SIEVE behaviour (future):
+    SIEVE uses a single binary "visited" bit instead of a multi-level
+    usage_count. StrategyNotifyHit will atomically set visited=1 in the buffer's
+    state, marking it as recently accessed so the eviction hand skips it on the
+    next pass.

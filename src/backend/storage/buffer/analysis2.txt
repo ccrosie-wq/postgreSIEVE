@@ -1,0 +1,280 @@
+SIEVE Implementation — State of Work & Next Steps
+====================================================
+Date: 2026-03-12
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+1. WHAT IS DONE
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+All scaffold work is complete.  The codebase compiles (pending ./configure)
+with ClockSweep still running through the new struct layout.
+
+freelist.c
+──────────
+  ✓ BufferStrategyControl commented out.
+  ✓ EvictionPolicy enum defined (EVICTION_CLOCKSWEEP=0, EVICTION_SIEVE=1).
+  ✓ BufferStrategyCommon struct defined (lock, active_policy, completePasses,
+    numBufferAllocs, bgwprocno).
+  ✓ StrategyControl redeclared as (BufferStrategyCommon *) in correct position
+    (after typedef, fixing forward-reference ordering error).
+  ✓ ClockSweepState struct + ClockSweepCtl process-local pointer.
+  ✓ SieveState struct + SieveCtl / SieveNext / SievePrev process-local pointers.
+  ✓ EvictionVtable struct defined (6 function pointer slots).
+  ✓ ClockSweepVtable / SieveVtable placeholder instances commented out.
+  ✓ ActiveEviction pointer declared as NULL.
+  ✓ ClockSweepTick() — both nextVictimBuffer references updated to
+    ClockSweepCtl->nextVictimBuffer (field moved out of BufferStrategyCommon).
+  ✓ StrategySyncStart() — nextVictimBuffer read updated to
+    ClockSweepCtl->nextVictimBuffer.
+  ✓ StrategyShmemSize() — allocation updated to
+    sizeof(BufferStrategyCommon) + sizeof(ClockSweepState).
+  ✓ StrategyInitialize() — ShmemInitStruct cast and size updated; ClockSweepCtl
+    pointer set immediately after allocation; nextVictimBuffer init via
+    ClockSweepCtl->nextVictimBuffer.
+  ✓ StrategyNotifyHit / StrategyNotifyInsert / StrategyNotifyInvalidate
+    wrapper functions added (dispatch to ActiveEviction vtable slots, NULL-safe).
+
+bufmgr.h
+────────
+  ✓ Prototypes for the three StrategyNotify* wrappers added under
+    "/* in freelist.c */" section.
+
+bufmgr.c
+────────
+  ✓ FINAL comments at PinBuffer(), BufferAlloc(), and InvalidateBuffer()
+    updated to show StrategyNotifyHit / StrategyNotifyInsert /
+    StrategyNotifyInvalidate calls (not yet uncommented — hooks are inactive).
+
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+2. STALE COMMENTS TO CLEAN UP
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+These are harmless but confusing — the fix was applied but the surrounding
+commentary wasn't updated:
+
+  freelist.c StrategySyncStart() (~line 465-468)
+    Three lines that now contradict each other: the SCAFF note says
+    "replace the line below" but the replacement is already live.
+    Lines 465, 467, 468 (SCAFF + old commented reference) should be removed,
+    leaving only the live ClockSweepCtl->nextVictimBuffer read.
+
+  freelist.c StrategyInitialize() (~line 638-645)
+    SCAFF block describing what to do is still present, but the described
+    changes are already applied.  Can be removed.
+
+  freelist.c before ClockSweepTick() (~line 212-217)
+    STEP 2.1 note says nextVictimBuffer "changes to ClockSweepCtl" — that
+    change is already done.  Note is now misleading.  Remove or rewrite as
+    a done-marker.
+
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+3. WHAT NEEDS TO HAPPEN NEXT
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+Tasks are listed in dependency order.  Each must compile and (once the build
+system is working) pass pg_regress before moving to the next.
+
+──────────────────────────────────────
+STEP 2 — ClockSweep vtable migration
+(zero behavior change; proves the seam)
+──────────────────────────────────────
+
+2a. Add ClockSweepShmemSize()  [freelist.c, new function]
+    Returns sizeof(ClockSweepState).
+    Signature: static Size ClockSweepShmemSize(int n_buffers)
+
+2b. Add ClockSweepInitialize()  [freelist.c, new function]
+    On !found: pg_atomic_init_u32(&ClockSweepCtl->nextVictimBuffer, 0).
+    On found:  ClockSweepCtl already pointed by StrategyInitialize(); no-op.
+    Signature: static void ClockSweepInitialize(bool found)
+
+2c. Add ClockSweepGetBuffer()  [freelist.c, new function]
+    Move the clock-sweep eviction loop from StrategyGetBuffer() (lines ~367-444)
+    verbatim into this function.  Signature must match the vtable slot:
+      static BufferDesc *ClockSweepGetBuffer(BufferAccessStrategy strategy,
+                                             uint64 *buf_state)
+    The bgwriter wakeup block (bgwprocno check) stays in StrategyGetBuffer()
+    above the dispatch point — it is algorithm-agnostic.
+
+2d. Populate ClockSweepVtable  [freelist.c]
+    Uncomment the placeholder and fill in real pointers:
+      static const EvictionVtable ClockSweepVtable = {
+          .get_buffer        = ClockSweepGetBuffer,
+          .notify_hit        = NULL,   /* PinBuffer CAS handles usage_count */
+          .notify_insert     = NULL,   /* no insertion bookkeeping needed */
+          .notify_invalidate = NULL,   /* circular array tolerates gaps */
+          .shmem_size        = ClockSweepShmemSize,
+          .initialize        = ClockSweepInitialize,
+      };
+
+2e. Wire StrategyInitialize() to set ActiveEviction  [freelist.c]
+    Hardcode to ClockSweep for now (GUC comes with SIEVE):
+      ActiveEviction = &ClockSweepVtable;
+    This line goes before the ShmemInitStruct call so shmem_size is valid.
+    Also call ActiveEviction->initialize(found) at the end of the function,
+    and remove the now-redundant inline nextVictimBuffer init (moved into
+    ClockSweepInitialize).
+
+2f. Update StrategyShmemSize() to use vtable  [freelist.c]
+    Replace the hardcoded two-part size with:
+      size = add_size(size, sizeof(BufferStrategyCommon));
+      size = add_size(size, ActiveEviction->shmem_size(NBuffers));
+    ActiveEviction must be set before this is called.  Currently
+    StrategyShmemSize() is called from BufferShmemSize() before
+    StrategyInitialize().  Fix: call the GUC read + ActiveEviction assignment
+    in a new StrategyEarlyInit() called from PostmasterMain before
+    BufferShmemSize(), OR read the GUC at the top of StrategyShmemSize()
+    itself if ActiveEviction is still NULL.
+
+2g. Replace clock-sweep loop in StrategyGetBuffer() with vtable dispatch
+    Uncomment the FINAL line:
+      return ActiveEviction->get_buffer(strategy, buf_state);
+    Delete the clock-sweep loop body that was moved to ClockSweepGetBuffer().
+    The bgwprocno block and numBufferAllocs increment stay above the dispatch.
+
+Verify: build succeeds, pg_regress buffer tests pass, behavior identical
+        to unmodified ClockSweep.
+
+──────────────────────────────────────
+STEP 3 — SIEVE implementation
+──────────────────────────────────────
+
+3a. Add SieveShmemSize()  [freelist.c, new function]
+    Returns size of SieveState header plus two int32 arrays of NBuffers+1:
+      return sizeof(SieveState) + 2 * (n_buffers + 1) * sizeof(int32);
+
+3b. Add SieveInitialize()  [freelist.c, new function]
+    Set process-local pointers into shmem:
+      SieveCtl  = (SieveState *) algo_block;
+      SieveNext = (int32 *)((char *) algo_block + sizeof(SieveState));
+      SievePrev = SieveNext + (NBuffers + 1);
+    On !found: init sentinel (NBuffers node points to itself):
+      SieveCtl->sieve_hand = NBuffers;
+      SieveCtl->sieve_head = NBuffers;
+      for (i = 0; i <= NBuffers; i++)
+          SieveNext[i] = SievePrev[i] = NBuffers;
+
+3c. Add SieveUnlinkLocked()  [freelist.c, internal helper]
+    Must be called under buffer_strategy_lock.  Unlinks node 'id' from the
+    doubly-linked list, updates hand/head if they pointed to 'id':
+      int32 n = SieveNext[id], p = SievePrev[id];
+      SieveNext[p] = n;  SievePrev[n] = p;
+      if (SieveCtl->sieve_head == id) SieveCtl->sieve_head = n;
+      if (SieveCtl->sieve_hand == id) SieveCtl->sieve_hand = p;
+      SieveNext[id] = SievePrev[id] = NBuffers;
+
+3d. Add SieveInsertAtHead()  [freelist.c, notify_insert hook]
+    Acquire buffer_strategy_lock.  Link new node between sentinel and old head.
+    Update sieve_head.  If queue was empty (hand == NBuffers), reset hand to
+    the new node.  Release lock.
+
+3e. Add SieveNotifyHit()  [freelist.c, notify_hit hook]
+    Lock-free CAS on BufferDesc.state: if usage_count == 0, set to 1 (visited).
+    Uses existing BUF_USAGECOUNT_ONE / BUF_USAGECOUNT_MASK macros.
+    No-op if usage_count already > 0 (already visited).
+
+3f. Add SieveRemove()  [freelist.c, notify_invalidate hook]
+    Acquire buffer_strategy_lock; call SieveUnlinkLocked(buf->buf_id); release.
+
+3g. Add SieveGetBuffer()  [freelist.c, get_buffer vtable slot]
+    Loop under buffer_strategy_lock:
+      Read hand position.  If hand == NBuffers: elog(ERROR, queue empty).
+      Read buf->state for the buffer under hand.
+      If visited (usage_count > 0): clear visited via atomic AND, advance hand
+        to SievePrev[hand], release lock, continue.
+      If pinned (refcount > 0): advance hand, release lock, continue.
+      Otherwise: victim found.  Call SieveUnlinkLocked(hand).  Release lock.
+      Try LockBufHdr(victim).  If refcount still 0: return victim.
+      Else UnlockBufHdr + SieveInsertAtHead (re-queue) and retry.
+    Increment StrategyControl->completePasses when hand wraps past
+    sieve_head (full traversal), for bgwriter compatibility.
+
+3h. Populate SieveVtable  [freelist.c]
+      static const EvictionVtable SieveVtable = {
+          .get_buffer        = SieveGetBuffer,
+          .notify_hit        = SieveNotifyHit,
+          .notify_insert     = SieveInsertAtHead,
+          .notify_invalidate = SieveRemove,
+          .shmem_size        = SieveShmemSize,
+          .initialize        = SieveInitialize,
+      };
+
+──────────────────────────────────────
+STEP 4 — Activate bufmgr.c hooks
+──────────────────────────────────────
+
+4a. PinBuffer() — uncomment the StrategyNotifyHit(buf) call.
+    Location: after TrackNewBufferPin(b) in the ref == NULL (first-pin) path.
+    ClockSweep: no-op (notify_hit = NULL).
+    SIEVE: sets visited = 1.
+
+4b. BufferAlloc() — uncomment the StrategyNotifyInsert(victim_buf_hdr) call.
+    Location: after LWLockRelease(newPartitionLock) following tag install.
+    ClockSweep: no-op.  SIEVE: SieveInsertAtHead().
+
+4c. InvalidateBuffer() — uncomment the StrategyNotifyInvalidate(buf) call.
+    Location: before ClearBufferTag(&buf->tag), under the buffer header lock.
+    ClockSweep: no-op.  SIEVE: SieveRemove().
+
+──────────────────────────────────────
+STEP 5 — GUC selection (optional for prototype)
+──────────────────────────────────────
+
+5a. Add buffer_eviction_policy GUC (PGC_POSTMASTER, enum).
+    In src/backend/utils/misc/guc_tables.c.
+
+5b. In StrategyInitialize() (or a new StrategyEarlyInit()), read the GUC and
+    set ActiveEviction = &ClockSweepVtable or &SieveVtable accordingly.
+    Write active_policy into StrategyControl->active_policy on !found;
+    assert it matches on found (shmem is fixed for lifetime of postmaster).
+
+    Without the GUC, SIEVE can still be tested by hardcoding
+    ActiveEviction = &SieveVtable in place of &ClockSweepVtable.
+
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+4. OPEN QUESTIONS / RISKS
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+A. StrategyShmemSize() call ordering
+   BufferShmemSize() calls StrategyShmemSize() before StrategyInitialize(),
+   so ActiveEviction must be set earlier than StrategyInitialize() when the
+   vtable dispatch in StrategyShmemSize() is activated (STEP 2f).
+   Options: (1) read GUC and set ActiveEviction at top of StrategyShmemSize()
+   if it is still NULL; (2) introduce a lightweight StrategyEarlyInit() called
+   from PostmasterMain before BufferShmemSize().
+
+B. Lock ordering: buffer header lock vs. buffer_strategy_lock
+   SieveRemove() is called from InvalidateBuffer() while holding the buffer
+   header spinlock.  SieveRemove() then acquires buffer_strategy_lock.
+   Ensure no code path acquires these in the opposite order (strategy lock
+   then header lock) to avoid deadlock.  Current ClockSweep code never holds
+   strategy lock while acquiring a header lock, so this ordering is safe.
+
+C. completePasses semantics in SIEVE
+   bgwriter uses completePasses to estimate write pressure.  ClockSweep
+   increments it on every full circular scan of NBuffers slots.  SIEVE should
+   increment it every time the hand completes a full traversal of the queue
+   (returns to sieve_head from the tail direction).  Implement in
+   SieveGetBuffer() with a traversal counter.
+
+D. StrategySyncStart() with SIEVE
+   StrategySyncStart() currently computes the sync start buffer as
+   nextVictimBuffer % NBuffers, relying on ClockSweep's monotonically
+   increasing counter.  Under SIEVE, the equivalent is sieve_hand.  A SIEVE
+   implementation of this function should return SieveCtl->sieve_hand
+   when EVICTION_SIEVE is active.  Can be handled with a simple if/switch on
+   StrategyControl->active_policy inside StrategySyncStart().
+
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+5. FILE CHANGE SUMMARY (this session)
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+  src/backend/storage/buffer/freelist.c  — heavily modified (scaffold complete)
+  src/backend/storage/buffer/bufmgr.c    — FINAL comments only (hooks inactive)
+  src/include/storage/bufmgr.h           — 3 extern prototypes added
+  src/backend/storage/buffer/analysis.txt  — full design document
+  src/backend/storage/buffer/analysis2.txt — this file
