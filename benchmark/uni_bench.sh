@@ -9,19 +9,22 @@ read_weight=1
 update_weight=1
 time=10
 buffer_size=128
+policy="LRU"
 
-while getopts ":r:u:t:b:" opt; do
+while getopts ":r:u:t:b:p:" opt; do
   case $opt in
     u) update_weight="$OPTARG" ;;
     r) read_weight="$OPTARG" ;;
     t) time="$OPTARG" ;;
     b) buffer_size="$OPTARG" ;;
+    p) policy="$OPTARG" ;;
     \?) echo "Invalid option: -$OPTARG" >&2
         echo "Usage:"
         echo "    -r read_weight (default 1)"
         echo "    -u update_weight (default 1)"
         echo "    -t time (s) (default 10)"
         echo "    -b buffer_size (MB) (default 128)"
+        echo "    -p policy (default CLOCK)"
         exit 1
         ;;
   esac
@@ -31,6 +34,7 @@ done
 ./set_buffersize.sh -m "$buffer_size"
 
 # Get Initial Misses + Hits
+psql -f pgscripts/reset_stats.sql
 hits_init=$(psql --csv -f pgscripts/read_hits.sql postgres | awk 'NR==2')
 total_init=$(psql --csv -f pgscripts/read_total.sql postgres | awk 'NR==2')
 

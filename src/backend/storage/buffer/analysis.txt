@@ -1,0 +1,433 @@
+SIEVE Buffer Eviction Algorithm — PostgreSQL Implementation Analysis
+====================================================================
+Target codebase: src/backend/storage/buffer/
+Date: 2026-03-11
+Revision: 2 — multi-algorithm pluggable strategy architecture
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+1. BACKGROUND: SIEVE ALGORITHM
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+SIEVE is a simple, cache-efficient eviction algorithm (Zhang et al., 2023).
+It uses a single FIFO queue with a "visited" bit per object and a roving
+"hand" pointer that scans backwards from the tail:
+
+  - On cache hit:  set visited = 1 on the cached buffer.
+  - On cache miss / eviction:
+      Walk the hand backward through the queue.
+      Skip any buffer with visited == 1, clearing it to 0 as you pass.
+      Evict the first buffer with visited == 0.
+      Insert the new buffer at the HEAD of the queue.
+      The hand does NOT reset; it keeps its position.
+
+Key property: recently inserted objects are protected naturally because
+the hand only reaches them after clearing all visited bits ahead of it.
+This gives SIEVE better scan-resistance than LRU with less overhead than
+ARC/LIRS.
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+2. CURRENT POSTGRES EVICTION: CLOCK-SWEEP
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+PostgreSQL uses a Clock-Sweep (second-chance) algorithm. Key data:
+
+  BufferStrategyControl (freelist.c:30-54)
+  ├─ buffer_strategy_lock   — spinlock protecting the struct
+  ├─ nextVictimBuffer       — atomic uint32; clock hand (mod NBuffers)
+  ├─ completePasses         — full-cycle counter (for bgwriter sync)
+  ├─ numBufferAllocs        — allocation rate counter (for bgwriter)
+  └─ bgwprocno              — bgwriter wake-up latch
+
+  BufferDesc.state (buf_internals.h:344)
+  — single pg_atomic_uint64 encoding:
+      [bits 0–17]   refcount (18 bits)
+      [bits 18–21]  usage_count (4 bits; max BM_MAX_USAGE_COUNT = 5)
+      [bits 22–33]  flags (12 bits: BM_DIRTY, BM_VALID, BM_LOCKED, …)
+      [bits 34–63]  lock state (share count + exclusive bits)
+
+Call chain for eviction:
+  BufferAlloc()         bufmgr.c:2101   — top-level buffer fetch
+    └─ GetVictimBuffer()  bufmgr.c:2452   — acquires a replaceable buffer
+         └─ StrategyGetBuffer()  freelist.c:173  — selects victim
+              └─ ClockSweepTick()  freelist.c:99   — advances clock hand
+
+On a cache HIT, BufferAlloc() calls PinBuffer() (bufmgr.c:3182), which
+increments usage_count (up to BM_MAX_USAGE_COUNT = 5) using a CAS loop.
+
+On a cache MISS, StrategyGetBuffer() loops calling ClockSweepTick() until
+it finds a buffer with usage_count == 0 and refcount == 0.  Each pass
+decrements usage_count by BUF_USAGECOUNT_ONE via CAS.
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+3. DESIGN GOAL: PLUGGABLE EVICTION STRATEGY LAYER
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+Rather than replacing ClockSweep outright, the revised plan introduces a
+thin dispatch layer so that ClockSweep, SIEVE, and future algorithms
+(e.g., LRU, ARC, TinyLFU) can coexist.  The active algorithm is selected
+by a GUC at postmaster startup and remains fixed for the lifetime of a
+shared-memory segment (algorithm state lives in shmem; changing it requires
+restart, the same as NBuffers).
+
+Design principles:
+  1. Common shared-memory header — fields needed by every algorithm
+     (bgwriter stats, spinlock, algorithm id) live in one struct.
+  2. Algorithm-specific state — each algorithm has its own struct appended
+     in the same shmem allocation, reached via a typed pointer.
+  3. Vtable dispatch — a static C struct of function pointers, one entry
+     per algorithm, selected at StrategyInitialize() time and stored in a
+     process-local pointer.  No virtual-dispatch overhead beyond one
+     indirection.
+  4. Stable external API — StrategyGetBuffer(), StrategyShmemSize(),
+     StrategyInitialize(), StrategyNotifyBgWriter(), StrategySyncStart(),
+     and the ring-buffer functions remain unchanged in signature.
+  5. Per-algorithm hit/insert/invalidate hooks — called from bufmgr.c at
+     the three lifecycle events; no-ops for algorithms that don't need them.
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+4. VTABLE AND SHARED-MEMORY LAYOUT
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+4a. Algorithm identifier (new GUC + enum)
+
+  In a new header src/include/storage/buf_strategy.h (or inline in
+  buf_internals.h):
+
+    typedef enum EvictionPolicy
+    {
+        EVICTION_CLOCKSWEEP = 0,   /* default; existing algorithm */
+        EVICTION_SIEVE      = 1,   /* Zhang et al. 2023 */
+        /* future: EVICTION_LRU, EVICTION_ARC, … */
+    } EvictionPolicy;
+
+  GUC: buffer_eviction_policy  (string, enum; PGC_POSTMASTER)
+  Default: "clocksweep"
+
+4b. Common shared-memory header
+
+  Every algorithm shares this prefix at the start of the shmem block:
+
+    typedef struct BufferStrategyCommon
+    {
+        slock_t           buffer_strategy_lock;   /* protects algorithm state */
+        EvictionPolicy    active_policy;           /* set at init, read-only after */
+        uint32            completePasses;          /* bgwriter: full traversal count */
+        pg_atomic_uint32  numBufferAllocs;         /* bgwriter: alloc rate counter */
+        int               bgwprocno;              /* bgwriter latch (-1 = none) */
+        /* algorithm-specific state follows immediately in shmem */
+    } BufferStrategyCommon;
+
+  The existing BufferStrategyControl is replaced by this struct.
+
+4c. Algorithm-specific structs (appended in shmem after the common header)
+
+  ClockSweep state (unchanged semantics):
+
+    typedef struct ClockSweepState
+    {
+        pg_atomic_uint32  nextVictimBuffer;   /* clock hand (mod NBuffers) */
+    } ClockSweepState;
+
+  SIEVE state:
+
+    typedef struct SieveState
+    {
+        int32   sieve_hand;      /* current eviction hand position (buf_id) */
+        int32   sieve_head;      /* head of queue (insertion point, buf_id) */
+        /* Sentinel node = NBuffers; empty queue: next[NBuffers] = NBuffers */
+        int32   next[FLEXIBLE_ARRAY_MEMBER];   /* doubly-linked queue: NBuffers+1 entries */
+        /* prev[] follows immediately; layout computed in StrategyShmemSize() */
+    } SieveState;
+
+    Because FLEXIBLE_ARRAY_MEMBER only allows one trailing array, prev[] is
+    allocated as a separate block within the same shmem chunk, pointed to by:
+
+        int32  *sieve_prev;   /* stored in a process-local global after init */
+
+    Alternatively (simpler): store next[] and prev[] as two plain int32*
+    pointers in BufferStrategyCommon pointing into the remainder of the
+    shmem allocation; no flexible-array tricks needed.
+
+4d. Vtable definition (process-local, not shared memory)
+
+    typedef struct EvictionVtable
+    {
+        /* Select a victim buffer; mirrors StrategyGetBuffer() contract */
+        BufferDesc *(*get_buffer)(BufferAccessStrategy strategy,
+                                  uint32 *buf_state);
+
+        /* Called on every cache hit (after PinBuffer succeeds) */
+        void        (*notify_hit)(BufferDesc *buf_hdr);
+
+        /* Called after a new page is loaded into a victim buffer */
+        void        (*notify_insert)(BufferDesc *buf_hdr);
+
+        /* Called before a buffer is invalidated (DropRelationBuffers etc.) */
+        void        (*notify_invalidate)(BufferDesc *buf_hdr);
+
+        /* Return bytes of algorithm-specific shmem needed (NBuffers given) */
+        Size        (*shmem_size)(int n_buffers);
+
+        /* Initialize algorithm-specific state from shmem */
+        void        (*initialize)(bool found);
+    } EvictionVtable;
+
+    Static vtable instances (one per algorithm, defined in freelist.c):
+
+        static const EvictionVtable ClockSweepVtable = {
+            .get_buffer       = ClockSweepGetBuffer,
+            .notify_hit       = ClockSweepNotifyHit,   /* increments usage_count */
+            .notify_insert    = NULL,                  /* no-op */
+            .notify_invalidate= NULL,                  /* no-op */
+            .shmem_size       = ClockSweepShmemSize,
+            .initialize       = ClockSweepInitialize,
+        };
+
+        static const EvictionVtable SieveVtable = {
+            .get_buffer       = SieveGetBuffer,
+            .notify_hit       = SieveNotifyHit,        /* sets visited = 1 */
+            .notify_insert    = SieveInsertAtHead,     /* enqueue at head */
+            .notify_invalidate= SieveRemove,           /* unlink from queue */
+            .shmem_size       = SieveShmemSize,
+            .initialize       = SieveInitialize,
+        };
+
+    Active vtable pointer (process-local global):
+
+        static const EvictionVtable *ActiveEviction = NULL;
+        /* set in StrategyInitialize() based on active_policy */
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+5. FILES TO MODIFY
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+5a. src/backend/storage/buffer/freelist.c  [PRIMARY]
+
+  (i) BufferStrategyControl (freelist.c:30-54)
+      REPLACE with BufferStrategyCommon (§4b).  The algorithm-specific
+      state (ClockSweepState or SieveState) is appended in the same shmem
+      chunk; process-local pointers are set during StrategyInitialize().
+
+  (ii) ClockSweepTick() (freelist.c:99-156)
+      KEEP entirely.  Rename to ClockSweepTick() or keep as-is.
+      It is now called by ClockSweepGetBuffer() (new wrapper) instead of
+      directly from StrategyGetBuffer().
+
+  (iii) StrategyGetBuffer() (freelist.c:173-307)
+      REPLACE the body with a single vtable dispatch:
+          return ActiveEviction->get_buffer(strategy, buf_state);
+      Keep the ring-buffer fast-path (strategy != NULL) before the dispatch,
+      unchanged.
+
+  (iv) StrategyShmemSize() (freelist.c:379-391)
+      MODIFY to sum the common header size plus the algorithm-specific size:
+          size = sizeof(BufferStrategyCommon);
+          size = add_size(size, ActiveEviction->shmem_size(NBuffers));
+      ActiveEviction is known at postmaster startup after the GUC is read.
+
+  (v) StrategyInitialize() (freelist.c:400-446)
+      MODIFY to:
+        • Allocate the common header + algorithm block in one ShmemInitStruct.
+        • On first call (not found): set active_policy from the GUC enum,
+          call ActiveEviction->initialize(false).
+        • On subsequent calls (found): assert active_policy matches GUC,
+          call ActiveEviction->initialize(true) for each new process to
+          set local pointers into shmem.
+        • Set ActiveEviction pointer based on active_policy.
+
+  (vi) New functions for ClockSweep (thin wrappers preserving existing logic):
+        ClockSweepGetBuffer()    — existing StrategyGetBuffer() clock loop
+        ClockSweepNotifyHit()    — existing PinBuffer() usage_count increment
+        ClockSweepShmemSize()    — sizeof(ClockSweepState)
+        ClockSweepInitialize()   — initialize nextVictimBuffer
+
+  (vii) New functions for SIEVE:
+        SieveGetBuffer()         — walk hand, clear visited bits, return victim
+        SieveNotifyHit()         — set visited = 1 (CAS on BufferDesc.state)
+        SieveInsertAtHead()      — enqueue buffer at queue head under spinlock
+        SieveRemove()            — unlink buffer from queue under spinlock
+        SieveShmemSize()         — sizeof(SieveState) + 2*(NBuffers+1)*sizeof(int32)
+        SieveInitialize()        — init hand, head, next[]/prev[] sentinel nodes
+
+5b. src/include/storage/buf_internals.h  [SECONDARY — visited bit]
+
+  The usage_count field in BufferDesc.state serves dual purpose:
+
+    ClockSweep: full 4-bit counter (0–5, BM_MAX_USAGE_COUNT = 5).
+                PinBuffer increments it; ClockSweepTick decrements it.
+
+    SIEVE:      binary visited flag.  Treat usage_count > 0 as visited = 1.
+                SieveNotifyHit() sets usage_count to 1 (clamp, not increment).
+                SieveGetBuffer() clears usage_count to 0 as it scans.
+                BM_MAX_USAGE_COUNT stays at 5 — SIEVE just never sets it above 1.
+
+  No struct layout change is required.  A new macro clarifies the dual use:
+
+    #define BUF_IS_VISITED(state) \
+        (BUF_STATE_GET_USAGECOUNT(state) > 0)
+
+  Option B (add a dedicated BM_SIEVE_VISITED flag) remains available if
+  keeping usage_count semantics strictly separate is preferred.  The vtable
+  structure makes this a local decision inside the SIEVE functions.
+
+5c. src/backend/storage/buffer/bufmgr.c  [MINOR — lifecycle hooks]
+
+  (i) PinBuffer() (bufmgr.c:3182)
+      The existing usage_count increment already handles ClockSweep.
+      Add after the CAS succeeds:
+          if (ActiveEviction->notify_hit)
+              ActiveEviction->notify_hit(buf);
+      For ClockSweep, notify_hit is ClockSweepNotifyHit which does what the
+      existing CAS loop already does — so ClockSweep's notify_hit can be NULL
+      and the existing increment code stays in place, OR the increment is moved
+      entirely into ClockSweepNotifyHit.  Either is correct; the latter is
+      cleaner.
+
+  (ii) BufferAlloc() (bufmgr.c:2101)
+      After the victim buffer's tag is installed and it is successfully pinned,
+      call the insert hook:
+          if (ActiveEviction->notify_insert)
+              ActiveEviction->notify_insert(victim_buf_hdr);
+      This is where SieveInsertAtHead() is invoked.  ClockSweep's
+      notify_insert is NULL (no insertion bookkeeping needed).
+
+  (iii) Buffer invalidation paths (DropRelationBuffers, InvalidateBuffer, etc.)
+      Before a buffer is cleared/invalidated, call:
+          if (ActiveEviction->notify_invalidate)
+              ActiveEviction->notify_invalidate(buf_hdr);
+      SieveRemove() unlinks the buffer from the doubly-linked queue.
+      ClockSweep's notify_invalidate is NULL (circular array is self-healing).
+
+  (iv) GetVictimBuffer() (bufmgr.c:2452)
+      No structural change.  Dirty-buffer write-out logic is algorithm-agnostic.
+
+5d. src/backend/utils/misc/guc_tables.c  [NEW GUC]
+    src/include/storage/bufmgr.h         [extern declaration]
+
+  Add GUC entry for buffer_eviction_policy:
+      name:    "buffer_eviction_policy"
+      context: PGC_POSTMASTER  (requires restart; shmem is fixed at startup)
+      type:    PGC_ENUM
+      options: {"clocksweep", "sieve"}
+      default: "clocksweep"
+
+  The enum value is read in StrategyInitialize() (first call, postmaster)
+  to set BufferStrategyCommon.active_policy and choose ActiveEviction.
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+6. DETAILED CHANGE MAP
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+File                         Location          Change type   Description
+─────────────────────────────────────────────────────────────────────
+freelist.c                   :30-54            REPLACE       BufferStrategyControl → BufferStrategyCommon; algorithm-specific state appended in shmem
+freelist.c                   :99-156           KEEP          ClockSweepTick() unchanged; called by ClockSweepGetBuffer()
+freelist.c                   :173-307          REPLACE       StrategyGetBuffer(): single vtable dispatch; ring-buffer fast-path preserved
+freelist.c                   :379-391          MODIFY        StrategyShmemSize(): common header + ActiveEviction->shmem_size(NBuffers)
+freelist.c                   :400-446          MODIFY        StrategyInitialize(): alloc common+algo block, set active_policy, init vtable pointer
+freelist.c                   (new)             ADD           EvictionVtable struct + ClockSweepVtable + SieveVtable static definitions
+freelist.c                   (new)             ADD           ClockSweepGetBuffer(), ClockSweepNotifyHit(), ClockSweepShmemSize(), ClockSweepInitialize()
+freelist.c                   (new)             ADD           SieveGetBuffer(), SieveNotifyHit(), SieveInsertAtHead(), SieveRemove(), SieveShmemSize(), SieveInitialize()
+buf_internals.h              (new macro)       ADD           BUF_IS_VISITED(state) — usage_count > 0; no struct layout change
+bufmgr.c                     :3182             MODIFY        PinBuffer(): call ActiveEviction->notify_hit() after CAS; ClockSweep notify_hit = NULL (existing code stays)
+bufmgr.c                     :2172-2173        ADD           BufferAlloc(): call ActiveEviction->notify_insert() after tag install
+bufmgr.c                     invalidation      ADD           InvalidateBuffer paths: call ActiveEviction->notify_invalidate() before clearing
+guc_tables.c                 (new entry)       ADD           buffer_eviction_policy GUC (PGC_POSTMASTER, enum)
+bufmgr.h                     (new extern)      ADD           extern declaration for buffer_eviction_policy
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+7. CONCURRENCY CONSIDERATIONS
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+ClockSweep concurrency (unchanged):
+  • nextVictimBuffer is pg_atomic_uint32; CAS-incremented without the
+    spinlock, same as today.
+  • buffer_strategy_lock is only used for completePasses/bgwprocno.
+
+SIEVE concurrency:
+  • buffer_strategy_lock must be held for any modification of sieve_hand,
+    sieve_head, and the next[]/prev[] arrays (queue structure).
+  • The visited bit (usage_count via BUF_IS_VISITED) can be set lock-free
+    via CAS on BufferDesc.state in SieveNotifyHit() — the bit only affects
+    eviction priority, not queue structure; reading/clearing it during the
+    scan is done under the spinlock.
+  • Buffer invalidation must call SieveRemove() under the spinlock.
+  • completePasses is incremented once per full queue traversal in
+    SieveGetBuffer() for bgwriter compatibility.
+  • numBufferAllocs incremented in StrategyGetBuffer() wrapper (before
+    vtable dispatch), same as today.
+
+Common:
+  • ActiveEviction pointer is process-local (set in StrategyInitialize per
+    backend); no locking needed on reads.
+  • active_policy in shared memory is written once at postmaster startup
+    (under the spinlock) and thereafter read-only; safe to read without lock.
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+8. FUNCTIONS TO PRESERVE UNCHANGED
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+These functions are algorithm-agnostic and require no modification:
+
+  freelist.c:
+    StrategySyncStart()        — reads completePasses/numBufferAllocs
+    StrategyNotifyBgWriter()   — bgwriter latch (field names unchanged)
+    GetAccessStrategy()        — ring-buffer strategy creation
+    GetAccessStrategyWithSize()
+    GetAccessStrategyBufferCount()
+    GetAccessStrategyPinLimit()
+    FreeAccessStrategy()
+    GetBufferFromRing()        — ring strategy fast-path
+    AddBufferToRing()
+    IOContextForStrategy()
+    StrategyRejectBuffer()
+    ClockSweepTick()           — kept, called by ClockSweepGetBuffer()
+
+  bufmgr.c:
+    GetVictimBuffer()          — dirty-buffer handling is algorithm-agnostic
+    BufferAlloc() cache-hit path (lines 2129-2158) — just calls PinBuffer()
+    All of ReadBuffer, ReleaseBuffer, MarkBufferDirty, etc.
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+9. ADDING A FUTURE EVICTION ALGORITHM
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+To add a new algorithm (e.g., LRU):
+
+  1. Define LruState struct with algorithm-specific shmem fields.
+  2. Implement the six vtable functions: LruGetBuffer, LruNotifyHit,
+     LruNotifyInsert, LruNotifyInvalidate, LruShmemSize, LruInitialize.
+  3. Define static LruVtable constant in freelist.c.
+  4. Add EVICTION_LRU to the EvictionPolicy enum.
+  5. Add "lru" to the buffer_eviction_policy GUC enum options.
+  6. Add a case to the vtable-selection switch in StrategyInitialize().
+  No changes to bufmgr.c, buf_internals.h, or the external Strategy API.
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+10. SUMMARY OF IMPLEMENTATION PRIORITY
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+Priority 1 (dispatch layer — enables everything else):
+  • freelist.c — define EvictionVtable struct; rename BufferStrategyControl
+    to BufferStrategyCommon; replace StrategyGetBuffer() body with vtable
+    dispatch; update StrategyShmemSize() and StrategyInitialize().
+  • guc_tables.c — add buffer_eviction_policy GUC.
+
+Priority 2 (ClockSweep refactor — zero behavior change, proves the seam):
+  • freelist.c — wrap existing clock-sweep code in ClockSweepGetBuffer(),
+    ClockSweepNotifyHit(), ClockSweepShmemSize(), ClockSweepInitialize();
+    populate ClockSweepVtable.
+
+Priority 3 (SIEVE core algorithm):
+  • freelist.c — implement SieveGetBuffer(), SieveNotifyHit(),
+    SieveInsertAtHead(), SieveRemove(), SieveShmemSize(), SieveInitialize();
+    populate SieveVtable.
+
+Priority 4 (bufmgr.c lifecycle hooks):
+  • bufmgr.c BufferAlloc() — call ActiveEviction->notify_insert().
+  • bufmgr.c PinBuffer()   — call ActiveEviction->notify_hit() (or confirm
+    ClockSweep can leave existing code in place with notify_hit = NULL).
+  • bufmgr.c invalidation paths — call ActiveEviction->notify_invalidate().
+
+Priority 5 (visited bit macro):
+  • buf_internals.h — add BUF_IS_VISITED() macro; no struct change.
