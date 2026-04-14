@@ -113,12 +113,12 @@ static void SieveNotifyInvalidate(BufferDesc *buf);
 // declare lru funcs
 // delcare lfu funcs
 
-static Size LeastFrequentlyUsedShmemSize(int n_buffers);
-static void LeastFrequentlyUsedInitialize(bool found);
-static BufferDesc *LeastFrequentlyUsedGetBuffer(BufferAccessStrategy strategy, uint64 *buf_state);
-static void LeastFrequentlyUsedInsert(BufferDesc *buf);
-static void LeastFrequentlyUsedUpdate(BufferDesc *buf);
-static void LeastFrequentlyUsedDelete(BufferDesc *buf);
+static Size LFUShmemSize(int n_buffers);
+static void LFUInitialize(bool found);
+static BufferDesc *LFUGetBuffer(BufferAccessStrategy strategy, uint64 *buf_state);
+static void LFUNotifyInsert(BufferDesc *buf);
+static void LFUNotifyHit(BufferDesc *buf);
+static void LFUNotifyInvalidate(BufferDesc *buf);
 
 
 //cswp specific refs
@@ -143,12 +143,12 @@ static const EvictionVtable SieveVtable = {
 
 // LFU refs
 static const EvictionVtable LFUVtable = {
-	.get_buffer        = LeastFrequentlyUsedGetBuffer,      
-	.notify_hit        = LeastFrequentlyUsedUpdate,
-	.notify_insert     = LeastFrequentlyUsedInsert,
-	.notify_invalidate = LeastFrequentlyUsedDelete,
-	.shmem_size        = LeastFrequentlyUsedShmemSize,
-	.initialize        = LeastFrequentlyUsedInitialize,
+	.get_buffer        = LFUGetBuffer,      
+	.notify_hit        = LFUNotifyHit,
+	.notify_insert     = LFUNotifyInsert,
+	.notify_invalidate = LFUNotifyInvalidate,
+	.shmem_size        = LFUShmemSize,
+	.initialize        = LFUInitialize,
 };
 
 static const EvictionVtable *ActiveEviction = NULL; //set at strat init
@@ -567,13 +567,13 @@ SieveGetBuffer(BufferAccessStrategy strategy, uint64 *buf_state)
 ////////////////////////////////////////////////////////////
 
 static Size
-LeastFrequentlyUsedShmemSize(int n_buffers)
+LFUShmemSize(int n_buffers)
 {
 	return sizeof(LFUState) + n_buffers * sizeof(int32);
 }
 
 static void
-LeastFrequentlyUsedInitilize(bool found)
+LFUInitilize(bool found)
 {
 	LFUFreq = (int32 *) (LFUCtl + 1); 
 
@@ -589,7 +589,7 @@ LeastFrequentlyUsedInitilize(bool found)
 }
 
 static void 
-LeastFrequentlyUsedInsert(BufferDesc *buf)
+LFUNotifyInsert(BufferDesc *buf)
 {
 	SpinLockAcquire(&StrategyControl->buffer_strategy_lock);
 	LFUFreq[buf->buf_id] = 1; //set to 1
@@ -597,7 +597,7 @@ LeastFrequentlyUsedInsert(BufferDesc *buf)
 }
 
 static void
-LeastFrequentlyUsedUpdate(BufferDesc *buf)
+LFUNotifyHit(BufferDesc *buf)
 {
 	SpinLockAcquire(&StrategyControl->buffer_strategy_lock);
 	LFUFreq[buf->buf_id] ++; //increment on hit
@@ -605,7 +605,7 @@ LeastFrequentlyUsedUpdate(BufferDesc *buf)
 }
 
 static void
-LeastFrequentlyUsedDelete(BufferDesc *buf)
+LFUNotifyInvalidate(BufferDesc *buf)
 {
 	SpinLockAcquire(&StrategyControl->buffer_strategy_lock);
 	LFUFreq[buf->buf_id] = 0; //reset on invalidate
@@ -613,14 +613,14 @@ LeastFrequentlyUsedDelete(BufferDesc *buf)
 }
 
 /*
- * LeastFrequentlyUsedGetBuffer
+ * LFUGetBuffer
  *
  * Scan all buffers starting from lfu_hand, find the unpinned buffer
  * with the lowest frequency count, and evict it.  O(n) per eviction
  * which matches ClockSweep's worst case.
  */
 static BufferDesc *
-LeastFrequentlyUsedGetBuffer(BufferAccessStrategy strategy, uint64 *buf_state)
+LFUGetBuffer(BufferAccessStrategy strategy, uint64 *buf_state)
 {
 	SpinLockAcquire(&StrategyControl->buffer_strategy_lock);
 
