@@ -20,7 +20,6 @@
 #include "storage/buf_internals.h"
 #include "storage/bufmgr.h"
 #include "storage/proc.h"
-#include "tracking/atomic_tracking_stats.h"
 
 #define INT_ACCESS_ONCE(var)	((int)(*((volatile int *)&(var))))
 
@@ -28,6 +27,7 @@ typedef enum EvictionPolicy
 {
     EVICTION_CLOCKSWEEP = 0,   // default
     EVICTION_SIEVE      = 1,   
+	  EVICTION_LFU		= 2,   
 } EvictionPolicy;
 
 
@@ -72,6 +72,18 @@ static SieveState *SieveCtl  = NULL;
 static int32      *SieveNext = NULL;
 static int32      *SievePrev = NULL;
 
+
+typedef struct 
+{
+	int32	lfu_hand;
+	int32 	bgw_sync_seq; //track sync pos for bgwriter
+
+	 // LFUFreq[] follow in shmem
+} LFUState;
+
+static LFUState *LFUCtl = NULL;
+static int32    *LFUFreq = NULL;
+
 typedef struct
 {
 	//comm these out, use absolute vals sotred at [NBuff] like SIEVE
@@ -108,6 +120,15 @@ static BufferDesc *SieveGetBuffer(BufferAccessStrategy strategy, uint64 *buf_sta
 static void SieveNotifyInsert(BufferDesc *buf);
 static void SieveNotifyInvalidate(BufferDesc *buf);
 
+// delcare lfu funcs
+
+static Size LFUShmemSize(int n_buffers);
+static void LFUInitialize(bool found);
+static BufferDesc *LFUGetBuffer(BufferAccessStrategy strategy, uint64 *buf_state);
+static void LFUNotifyInsert(BufferDesc *buf);
+static void LFUNotifyHit(BufferDesc *buf);
+static void LFUNotifyInvalidate(BufferDesc *buf);
+
 //declare lru funcs
 static Size LRUShmemSize(int n_buffers);
 static void LRUInitialize(bool found);
@@ -138,6 +159,17 @@ static const EvictionVtable SieveVtable = {
 	.initialize        = SieveInitialize,
 };
 
+// LFU refs
+static const EvictionVtable LFUVtable = {
+	.get_buffer        = LFUGetBuffer,      
+	.notify_hit        = LFUNotifyHit,
+	.notify_insert     = LFUNotifyInsert,
+	.notify_invalidate = LFUNotifyInvalidate,
+	.shmem_size        = LFUShmemSize,
+	.initialize        = LFUInitialize,
+};
+
+//LRU refs
 static const EvictionVtable LRUVtable = {
 	.get_buffer        = LRUGetBuffer,
 	.notify_hit        = LRUNotifyHit,
@@ -186,7 +218,7 @@ static void AddBufferToRing(BufferAccessStrategy strategy,
 
 
 ////////////////////////////////////////////////////////////
-////////////CLOCK SWEEP STUFF            ///////////////////
+////////////CLOCK SWEEP FUNCS            ///////////////////
 ////////////////////////////////////////////////////////////
 
 
@@ -751,8 +783,139 @@ LRUNotifyInvalidate(BufferDesc *buf)
 
 
 ////////////////////////////////////////////////////////////
+/////////////////	LRU FUNCS						////////
 ////////////////////////////////////////////////////////////
+
+
 ////////////////////////////////////////////////////////////
+/////////////////	LFU FUNCS						////////
+////////////////////////////////////////////////////////////
+
+static Size
+LFUShmemSize(int n_buffers)
+{
+	return sizeof(LFUState) + n_buffers * sizeof(int32);
+}
+
+static void
+LFUInitilize(bool found)
+{
+	LFUFreq = (int32 *) (LFUCtl + 1); 
+
+	if (!found) {
+		int i;
+		LFUCtl ->lfu_hand = 0;
+		LFUCtl ->bgw_sync_seq = 0;
+
+		for(i = 0; i < NBuffers; i++) {
+			LFUFreq[i] = 0;
+		}
+	}
+}
+
+static void 
+LFUNotifyInsert(BufferDesc *buf)
+{
+	SpinLockAcquire(&StrategyControl->buffer_strategy_lock);
+	LFUFreq[buf->buf_id] = 1; //set to 1
+	SpinLockRelease(&StrategyControl->buffer_strategy_lock);
+}
+
+static void
+LFUNotifyHit(BufferDesc *buf)
+{
+	SpinLockAcquire(&StrategyControl->buffer_strategy_lock);
+	LFUFreq[buf->buf_id] ++; //increment on hit
+	SpinLockRelease(&StrategyControl->buffer_strategy_lock);
+}
+
+static void
+LFUNotifyInvalidate(BufferDesc *buf)
+{
+	SpinLockAcquire(&StrategyControl->buffer_strategy_lock);
+	LFUFreq[buf->buf_id] = 0; //reset on invalidate
+	SpinLockRelease(&StrategyControl->buffer_strategy_lock);
+}
+
+/*
+ * LFUGetBuffer
+ *
+ * Scan all buffers starting from lfu_hand, find the unpinned buffer
+ * with the lowest frequency count, and evict it.  O(n) per eviction
+ * which matches ClockSweep's worst case.
+ */
+static BufferDesc *
+LFUGetBuffer(BufferAccessStrategy strategy, uint64 *buf_state)
+{
+	SpinLockAcquire(&StrategyControl->buffer_strategy_lock);
+
+	for (;;)
+	{
+		int32		min_freq   = INT32_MAX;
+		int32		min_buf_id = -1;
+		int			i;
+		int32		scan_start = LFUCtl->lfu_hand;
+
+		/* Phase 1: full scan to find minimum frequency among evictable bufs */
+		for (i = 0; i < NBuffers; i++)
+		{
+			int32		candidate = (scan_start + i) % NBuffers;
+			BufferDesc *buf;
+			uint64		local_state;
+
+			buf         = GetBufferDescriptor(candidate);
+			local_state = pg_atomic_read_u64(&buf->state);
+
+			/* skip pinned or locked buffers */
+			if (BUF_STATE_GET_REFCOUNT(local_state) != 0)
+				continue;
+			if (unlikely(local_state & BM_LOCKED))
+				continue;
+			
+			if (LFUFreq[candidate] < min_freq)
+			{
+				min_freq   = LFUFreq[candidate];
+				min_buf_id = candidate;
+			}
+		}
+
+		if (min_buf_id == -1)
+		{
+			SpinLockRelease(&StrategyControl->buffer_strategy_lock);
+			elog(ERROR, "no unpinned buffers available");
+		}
+
+		/* Phase 2: try to claim the victim via CAS */
+		{
+			BufferDesc *buf       = GetBufferDescriptor(min_buf_id);
+			uint64		old_state = pg_atomic_read_u64(&buf->state);
+			uint64		new_state;
+
+			/* re-check: may have been pinned/locked between scan and claim */
+			if (BUF_STATE_GET_REFCOUNT(old_state) != 0 ||
+				unlikely(old_state & BM_LOCKED))
+				continue;   /* retry full scan */
+
+			new_state = old_state + BUF_REFCOUNT_ONE;
+			if (pg_atomic_compare_exchange_u64(&buf->state, &old_state,
+											   new_state))
+			{ 
+				/* evict: reset freq, advance hand past victim */
+				LFUFreq[min_buf_id] = 0;
+				LFUCtl->lfu_hand = (min_buf_id + 1) % NBuffers;
+
+				if (strategy != NULL)
+					AddBufferToRing(strategy, buf);
+
+				*buf_state = new_state;
+				TrackNewBufferPin(BufferDescriptorGetBuffer(buf));
+				SpinLockRelease(&StrategyControl->buffer_strategy_lock);
+				return buf;
+			}
+		}
+		/* CAS failed, retry full scan */
+	}
+}
 
 
 /*
@@ -959,10 +1122,13 @@ StrategyShmemSize(void)
 
 	/* size of the shared replacement strategy control block */
 	//size the new common struct + target struct
+  
 	// size = add_size(size, MAXALIGN(sizeof(BufferStrategyCommon) + sizeof(ClockSweepState)));
+
 	size = add_size(size, MAXALIGN(sizeof(BufferStrategyCommon) + 
 		Max(sizeof(ClockSweepState), 
 			Max(sizeof(SieveState) + 2 * (NBuffers + 1) * sizeof(int32),
+          sizeof(LFUState) + (NBuffers + 1) * sizeof(int32),
 				sizeof(LRUState)   + 2 * (NBuffers + 1) * sizeof(int32)))));
 
 		//change alloc one policy selection in place?
@@ -999,7 +1165,8 @@ StrategyInitialize(bool init)
 	 */
 	//ActiveEviction = &ClockSweepVtable;
 	// ActiveEviction = &SieveVtable;
-	ActiveEviction = &LRUVtable;
+	ActiveEviction = &LFUVtable;
+	// ActiveEviction = &LRUVtable;
 
 	StrategyControl = (BufferStrategyCommon *)
 		ShmemInitStruct("Buffer Strategy Status",
@@ -1013,6 +1180,7 @@ StrategyInitialize(bool init)
 	
 	ClockSweepCtl = (ClockSweepState *)((char *) StrategyControl + sizeof(BufferStrategyCommon));
 	SieveCtl      = (SieveState *)     ((char *) StrategyControl + sizeof(BufferStrategyCommon));
+	LFUCtl        = (LFUState *)       ((char *) StrategyControl + sizeof(BufferStrategyCommon));
 	LRUCtl		  = (LRUState *)       ((char *) StrategyControl + sizeof(BufferStrategyCommon));
 	
 	if (!found)
