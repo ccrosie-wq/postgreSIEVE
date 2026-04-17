@@ -20,8 +20,8 @@ tmp=$(mktemp)
 sed "s/^\(shared_buffers =\).*/\1 ${m}MB/" $PGCONF > "$tmp"
 mv "$tmp" $PGCONF
 
-pg_isready
 if pg_isready; then
     echo "Postgres running, reloading conf..."
-    /usr/local/pgsql/bin/pg_ctl -D /usr/local/pgsql/data reload
+    ./stop_db.sh
+    ./launch_db.sh
 fi

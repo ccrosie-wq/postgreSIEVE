@@ -17,7 +17,9 @@ class ExtractFormat:
 # format = (starting token of line, type of data, index of value of interest in the string (separated by " "))
 TPS = ExtractFormat("tps", float, " ", 2, "", "Transactions / Second")
 RATIO = ExtractFormat("ratio", float, " ", 1, "", "hits / total")
-DISPLAY_STATS = [TPS , RATIO]
+LATENCY = ExtractFormat("latency", float, " ", 3, "", "ms")
+#DISPLAY_STATS = [TPS , RATIO, LATENCY]
+DISPLAY_STATS = [LATENCY]
 
 
 # indices of these values in the file names (split by _)
