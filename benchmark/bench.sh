@@ -9,7 +9,7 @@ time=10
 buffer_size=128
 alpha=1.5
 dist="zipfian"
-clients="12"
+clients="2"
 
 while getopts ":r:u:t:a:b:d:c:" opt; do
   case $opt in
@@ -18,8 +18,8 @@ while getopts ":r:u:t:a:b:d:c:" opt; do
     t) time="$OPTARG" ;;
     a) alpha="$OPTARG" ;;
     b) buffer_size="$OPTARG" ;;
-    d) dist="OPTARG" ;;
-    c) clients="OPTARG";;
+    d) dist="$OPTARG" ;;
+    c) clients="$OPTARG";;
     \?) echo "Invalid option: -$OPTARG" >&2
         echo "Usage:"
         echo "    -r read_weight (default 1)"
