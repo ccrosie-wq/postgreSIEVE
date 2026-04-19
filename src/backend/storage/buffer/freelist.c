@@ -798,7 +798,7 @@ LFUShmemSize(int n_buffers)
 }
 
 static void
-LFUInitilize(bool found)
+LFUInitialize(bool found)
 {
 	LFUFreq = (int32 *) (LFUCtl + 1); 
 
