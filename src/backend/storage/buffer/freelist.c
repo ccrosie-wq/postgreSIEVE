@@ -1163,9 +1163,9 @@ StrategyInitialize(bool init)
 	/*
 	 * Get or create the shared strategy control block
 	 */
-	ActiveEviction = &ClockSweepVtable;
+	// ActiveEviction = &ClockSweepVtable;
 	// ActiveEviction = &SieveVtable;
-	// ActiveEviction = &LFUVtable;
+	ActiveEviction = &LFUVtable;
 	// ActiveEviction = &LRUVtable;
 
 	StrategyControl = (BufferStrategyCommon *)
