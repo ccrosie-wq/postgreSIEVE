@@ -26,8 +26,8 @@
 typedef enum EvictionPolicy
 {
     EVICTION_CLOCKSWEEP = 0,   // default
-    EVICTION_SIEVE      = 1,   
-	  EVICTION_LFU		= 2,   
+    EVICTION_SIEVE      = 1,
+	  EVICTION_LFU		= 2,
 } EvictionPolicy;
 
 
@@ -42,7 +42,7 @@ typedef struct
 	EvictionPolicy    active_policy;          // define policy
     uint32            completePasses;         //-- bgwriter: full traversal count
     pg_atomic_uint32  numBufferAllocs;        /* Buffers allocated since last reset */
-    
+
 	/*
 	 * Bgworker process to be notified upon activity or -1 if none. See
 	 * StrategyNotifyBgWriter.
@@ -55,8 +55,8 @@ static BufferStrategyCommon *StrategyControl = NULL;
 
 
 //addition for clocksweep
-typedef struct { 
-	pg_atomic_uint32 nextVictimBuffer; 
+typedef struct {
+	pg_atomic_uint32 nextVictimBuffer;
 } ClockSweepState;
 
 static ClockSweepState *ClockSweepCtl = NULL;
@@ -73,7 +73,7 @@ static int32      *SieveNext = NULL;
 static int32      *SievePrev = NULL;
 
 
-typedef struct 
+typedef struct
 {
 	int32	lfu_hand;
 	int32 	bgw_sync_seq; //track sync pos for bgwriter
@@ -161,7 +161,7 @@ static const EvictionVtable SieveVtable = {
 
 // LFU refs
 static const EvictionVtable LFUVtable = {
-	.get_buffer        = LFUGetBuffer,      
+	.get_buffer        = LFUGetBuffer,
 	.notify_hit        = LFUNotifyHit,
 	.notify_insert     = LFUNotifyInsert,
 	.notify_invalidate = LFUNotifyInvalidate,
@@ -324,7 +324,7 @@ ClockSweepGetBuffer(BufferAccessStrategy strategy, uint64 *buf_state)
 
             if (BUF_STATE_GET_REFCOUNT(local_buf_state) != 0)
             {
-                if (--trycounter == 0) 
+                if (--trycounter == 0)
 				{
 					/*
 					 * We've scanned all the buffers without making any state
@@ -428,7 +428,7 @@ SieveAdvanceHand(void)
 	{ //curr was at head, wrap around to tail
 		next = SievePrev[NBuffers];
 		// StrategyControl->completePasses++; // increment to signal loop, fix bug
-	}	
+	}
 	SieveCtl->sieve_hand = next;
 }
 
@@ -589,7 +589,7 @@ SieveGetBuffer(BufferAccessStrategy strategy, uint64 *buf_state)
 ////////////////////////////////////////////////////////////
 
 static Size
-LRUShmemSize(int n_buffers) 
+LRUShmemSize(int n_buffers)
 {
 	//init normal struct
 	//another 'faux-d-link-list' w/ arrs
@@ -601,7 +601,7 @@ static void
 LRUInitialize(bool found)
 {
 	int i;
-	
+
 	LRUNext = (int32 *)(LRUCtl + 1); //
 	LRUPrev = LRUNext + (NBuffers + 1);
 
@@ -629,7 +629,7 @@ LRUGetBuffer(BufferAccessStrategy strategy, uint64 *buf_state)
 
 	candidate_id = LRUPrev[NBuffers];//just get the tail.......
 
-	for (;;) 
+	for (;;)
 	{
 		BufferDesc *buf;
 		uint64 old_buf_state;
@@ -667,7 +667,7 @@ LRUGetBuffer(BufferAccessStrategy strategy, uint64 *buf_state)
 			if (strategy != NULL) {
 				AddBufferToRing(strategy, buf);
 			}
-			
+
 			*buf_state = new_buf_state;
 			TrackNewBufferPin(BufferDescriptorGetBuffer(buf));
 			SpinLockRelease(&StrategyControl->buffer_strategy_lock);
@@ -733,7 +733,7 @@ LRUInsertMRU(int32 buf_id)
 
 /// end help
 
-static void 
+static void
 LRUNotifyHit(BufferDesc *buf)
 {
 	int32 buf_id = buf->buf_id;
@@ -800,7 +800,7 @@ LFUShmemSize(int n_buffers)
 static void
 LFUInitialize(bool found)
 {
-	LFUFreq = (int32 *) (LFUCtl + 1); 
+	LFUFreq = (int32 *) (LFUCtl + 1);
 
 	if (!found) {
 		int i;
@@ -813,7 +813,7 @@ LFUInitialize(bool found)
 	}
 }
 
-static void 
+static void
 LFUNotifyInsert(BufferDesc *buf)
 {
 	SpinLockAcquire(&StrategyControl->buffer_strategy_lock);
@@ -871,7 +871,7 @@ LFUGetBuffer(BufferAccessStrategy strategy, uint64 *buf_state)
 				continue;
 			if (unlikely(local_state & BM_LOCKED))
 				continue;
-			
+
 			if (LFUFreq[candidate] < min_freq)
 			{
 				min_freq   = LFUFreq[candidate];
@@ -899,7 +899,7 @@ LFUGetBuffer(BufferAccessStrategy strategy, uint64 *buf_state)
 			new_state = old_state + BUF_REFCOUNT_ONE;
 			if (pg_atomic_compare_exchange_u64(&buf->state, &old_state,
 											   new_state))
-			{ 
+			{
 				/* evict: reset freq, advance hand past victim */
 				LFUFreq[min_buf_id] = 0;
 				LFUCtl->lfu_hand = (min_buf_id + 1) % NBuffers;
@@ -1018,7 +1018,7 @@ StrategySyncStart(uint32 *complete_passes, uint32 *num_buf_alloc)
 		// *complete_passes = StrategyControl->completePasses;
 		uint32 seq = (uint32) ++SieveCtl->bgw_sync_seq;
 		result = seq % NBuffers;
-		
+
 		if (complete_passes)
           *complete_passes = seq / NBuffers;
 	}
@@ -1031,7 +1031,7 @@ StrategySyncStart(uint32 *complete_passes, uint32 *num_buf_alloc)
 			*complete_passes = seq / NBuffers;
 		}
 	}
-	else 
+	else
 	{
 		nextVictimBuffer = pg_atomic_read_u32(&ClockSweepCtl->nextVictimBuffer);
 		result = nextVictimBuffer % NBuffers;
@@ -1122,16 +1122,16 @@ StrategyShmemSize(void)
 
 	/* size of the shared replacement strategy control block */
 	//size the new common struct + target struct
-  
+
 	// size = add_size(size, MAXALIGN(sizeof(BufferStrategyCommon) + sizeof(ClockSweepState)));
 
-	size = add_size(size, MAXALIGN(sizeof(BufferStrategyCommon) + 
-		Max(sizeof(ClockSweepState), 
+	size = add_size(size, MAXALIGN(sizeof(BufferStrategyCommon) +
+		Max(sizeof(ClockSweepState),
 			Max(sizeof(SieveState) + 2 * (NBuffers + 1) * sizeof(int32),
           		Max(sizeof(LFUState) + (NBuffers + 1) * sizeof(int32),
 				sizeof(LRUState)   + 2 * (NBuffers + 1) * sizeof(int32))))));
 
-		//change alloc one policy selection in place?
+	//change alloc one policy selection in place?
 	return size;
 }
 
@@ -1165,8 +1165,8 @@ StrategyInitialize(bool init)
 	 */
 	// ActiveEviction = &ClockSweepVtable;
 	// ActiveEviction = &SieveVtable;
-	ActiveEviction = &LFUVtable;
-	// ActiveEviction = &LRUVtable;
+	// ActiveEviction = &LFUVtable;
+	ActiveEviction = &LRUVtable;
 
 	StrategyControl = (BufferStrategyCommon *)
 		ShmemInitStruct("Buffer Strategy Status",
@@ -1174,15 +1174,16 @@ StrategyInitialize(bool init)
 								 Max(sizeof(ClockSweepState),
 									Max(sizeof(SieveState) +
 									 2 * (NBuffers + 1) * sizeof(int32),
-									 sizeof(LRUState)   + 2 * (NBuffers + 1) * sizeof(int32)))),
+									 Max(sizeof(LFUState) + (NBuffers + 1) * sizeof(int32),
+										 sizeof(LRUState) + 2 * (NBuffers + 1) * sizeof(int32))))),
 						&found);
 
-	
+
 	ClockSweepCtl = (ClockSweepState *)((char *) StrategyControl + sizeof(BufferStrategyCommon));
 	SieveCtl      = (SieveState *)     ((char *) StrategyControl + sizeof(BufferStrategyCommon));
 	LFUCtl        = (LFUState *)       ((char *) StrategyControl + sizeof(BufferStrategyCommon));
 	LRUCtl		  = (LRUState *)       ((char *) StrategyControl + sizeof(BufferStrategyCommon));
-	
+
 	if (!found)
 	{
 		/*
