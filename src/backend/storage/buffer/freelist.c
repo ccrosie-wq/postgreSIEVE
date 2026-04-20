@@ -1125,11 +1125,11 @@ StrategyShmemSize(void)
   
 	// size = add_size(size, MAXALIGN(sizeof(BufferStrategyCommon) + sizeof(ClockSweepState)));
 
-	size = add_size(size, MAXALIGN(sizeof(BufferStrategyCommon) + 
-		Max(sizeof(ClockSweepState), 
+	size = add_size(size, MAXALIGN(sizeof(BufferStrategyCommon) +
+		Max(sizeof(ClockSweepState),
 			Max(sizeof(SieveState) + 2 * (NBuffers + 1) * sizeof(int32),
-          sizeof(LFUState) + (NBuffers + 1) * sizeof(int32),
-				sizeof(LRUState)   + 2 * (NBuffers + 1) * sizeof(int32)))));
+				Max(sizeof(LFUState) + (NBuffers + 1) * sizeof(int32),
+					sizeof(LRUState) + 2 * (NBuffers + 1) * sizeof(int32))))));
 
 		//change alloc one policy selection in place?
 	return size;
@@ -1165,8 +1165,8 @@ StrategyInitialize(bool init)
 	 */
 	//ActiveEviction = &ClockSweepVtable;
 	// ActiveEviction = &SieveVtable;
-	ActiveEviction = &LFUVtable;
-	// ActiveEviction = &LRUVtable;
+	// ActiveEviction = &LFUVtable;
+	ActiveEviction = &LRUVtable;
 
 	StrategyControl = (BufferStrategyCommon *)
 		ShmemInitStruct("Buffer Strategy Status",
@@ -1174,7 +1174,8 @@ StrategyInitialize(bool init)
 								 Max(sizeof(ClockSweepState),
 									Max(sizeof(SieveState) +
 									 2 * (NBuffers + 1) * sizeof(int32),
-									 sizeof(LRUState)   + 2 * (NBuffers + 1) * sizeof(int32)))),
+									 Max(sizeof(LFUState) + (NBuffers + 1) * sizeof(int32),
+										 sizeof(LRUState) + 2 * (NBuffers + 1) * sizeof(int32))))),
 						&found);
 
 	

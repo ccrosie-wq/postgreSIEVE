@@ -2164,6 +2164,9 @@ BufferAlloc(SMgrRelation smgr, char relpersistence, ForkNumber forkNum,
 
 		*foundPtr = true;
 
+		if (valid)
+			StrategyNotifyHit(buf); //treat as hit
+
 		if (!valid)
 		{
 			/*
@@ -2213,6 +2216,7 @@ BufferAlloc(SMgrRelation smgr, char relpersistence, ForkNumber forkNum,
 		 * have to call ResourceOwnerEnlarge() & ReservePrivateRefCountEntry()
 		 * before acquiring the lock, for the rare case of such a collision.
 		 */
+		StrategyNotifyInsert(victim_buf_hdr); //ret evicted buf to list
 		UnpinBuffer(victim_buf_hdr);
 
 		/* remaining code should match code at top of routine */
@@ -2531,8 +2535,10 @@ again:
 		{
 			/*
 			 * Someone else has locked the buffer, so give it up and loop back
-			 * to get another one.
+			 * to get another one.  Re-insert it into the eviction list so it
+			 * isn't permanently lost.
 			 */
+			StrategyNotifyInsert(buf_hdr); //stop drain
 			UnpinBuffer(buf_hdr);
 			goto again;
 		}
@@ -2557,6 +2563,7 @@ again:
 				&& StrategyRejectBuffer(strategy, buf_hdr, from_ring))
 			{
 				LockBuffer(buf, BUFFER_LOCK_UNLOCK);
+				StrategyNotifyInsert(buf_hdr);//prevent drain
 				UnpinBuffer(buf_hdr);
 				goto again;
 			}
@@ -2600,6 +2607,7 @@ again:
 	 */
 	if ((buf_state & BM_TAG_VALID) && !InvalidateVictimBuffer(buf_hdr))
 	{
+		StrategyNotifyInsert(buf_hdr); //stop drain
 		UnpinBuffer(buf_hdr);
 		goto again;
 	}
