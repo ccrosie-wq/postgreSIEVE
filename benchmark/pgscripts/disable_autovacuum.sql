@@ -1,0 +1,1 @@
+ALTER TABLE pgbench_accounts SET (autovacuum_enabled = off);

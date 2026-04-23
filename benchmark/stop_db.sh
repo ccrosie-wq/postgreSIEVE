@@ -1,3 +1,3 @@
 #!/bin/bash
 
-pg_ctl -D /usr/local/pgsql/data -l logfile stop
+pg_ctl -D /mnt/Storage/pgsql/data -l logfile stop

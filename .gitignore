@@ -56,3 +56,6 @@ reports/midway/*
 !reports/final/final_report_template.tex
 !reports/midway/midway_report.tex
 
+benchmark/env
+
+.vscode

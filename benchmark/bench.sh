@@ -9,9 +9,10 @@ time=10
 buffer_size=128
 alpha=1.5
 dist="zipfian"
-clients="2"
+w=1.0
+threads=2
 
-while getopts ":r:u:t:a:b:d:c:" opt; do
+while getopts ":r:u:t:a:b:d:c:w:p:" opt; do
   case $opt in
     u) update_weight="$OPTARG" ;;
     r) read_weight="$OPTARG" ;;
@@ -20,6 +21,8 @@ while getopts ":r:u:t:a:b:d:c:" opt; do
     b) buffer_size="$OPTARG" ;;
     d) dist="$OPTARG" ;;
     c) clients="$OPTARG";;
+    w) w="$OPTARG";;
+    p) threads="$OPTARG";;
     \?) echo "Invalid option: -$OPTARG" >&2
         echo "Usage:"
         echo "    -r read_weight (default 1)"
@@ -29,13 +32,12 @@ while getopts ":r:u:t:a:b:d:c:" opt; do
         echo "    -b buffer_size (MB) (default 128)"
         echo "    -d distribution (default zipfian)"
         echo "    -c clients (default 12)"
+        echo "    -w working_set_ratio (default 1)"
+        echo "    -p threads (default 2)"
         exit 1
         ;;
   esac
 done
-
-# use half as many threads as clients (calculate by piping to basic calculator)
-THREADS=$(echo "$clients / 2" | bc)
 
 # set buffer size
 ./set_buffersize.sh -m "$buffer_size"
@@ -44,7 +46,11 @@ THREADS=$(echo "$clients / 2" | bc)
 tmp=$(mktemp)
 alp=$alpha awk '/\\set alpha/ {$0="\\set alpha "ENVIRON["alp"]""; print; next} {print}' pgscripts/zipfian_select.sql > "$tmp" && mv "$tmp" pgscripts/zipfian_select.sql
 alp=$alpha awk '/\\set alpha/ {$0="\\set alpha "ENVIRON["alp"]""; print; next} {print}' pgscripts/zipfian_update.sql > "$tmp" && mv "$tmp" pgscripts/zipfian_update.sql
-chmod -R g+rwx pgscripts/* # ensure permissions are retained so users can still read the file
+
+# apply working set
+tmp=$(mktemp)
+wset=$w awk '/\\set wset/ {$0="\\set wset "ENVIRON["wset"]""; print; next} {print}' pgscripts/uniform_select.sql > "$tmp" && mv "$tmp" pgscripts/uniform_select.sql
+wset=$w awk '/\\set wset/ {$0="\\set wset "ENVIRON["wset"]""; print; next} {print}' pgscripts/uniform_update.sql > "$tmp" && mv "$tmp" pgscripts/uniform_update.sql
 
 # Get Initial Misses + Hits
 psql -f pgscripts/reset_stats.sql
@@ -53,7 +59,7 @@ total_init=$(psql --csv -f pgscripts/read_total.sql postgres | awk 'NR==2')
 
 # run the benchmark
 bench_file=outputs/$(date -Iseconds)_${read_weight}_${update_weight}_${alpha}.txt
-pgbench -c ${clients} -j "${THREADS}" -s ${SCALE_FACTOR} -T "${time}" -f pgscripts/${dist}_select.sql@"${read_weight}" -f pgscripts/${dist}_update.sql@"${update_weight}" postgres >> "$bench_file"
+pgbench -c ${clients} -j "${threads}" -s ${SCALE_FACTOR} -T "${time}" -f pgscripts/${dist}_select.sql@"${read_weight}" -f pgscripts/${dist}_update.sql@"${update_weight}" postgres >> "$bench_file"
 
 # Get Ending Misses + Hits
 hits_after=$(psql --csv -f pgscripts/read_hits.sql postgres | awk 'NR==2')
@@ -63,3 +69,6 @@ hits_delta=$( echo "$hits_after-$hits_init"| bc)
 total_delta=$( echo "$total_after-$total_init"| bc)
 ratio=$(python3 -c "print($hits_delta/$total_delta)" | bc)
 echo "ratio: $ratio" >> "$bench_file"
+
+# vacuum table
+psql -f pgscripts/vacuum.sql

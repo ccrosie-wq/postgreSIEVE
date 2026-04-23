@@ -1,6 +1,6 @@
 #!/bin/bash
 
-PGCONF="/usr/local/pgsql/data/postgresql.conf"
+PGCONF="/mnt/Storage/pgsql/data/postgresql.conf"
 
 m="128"
 

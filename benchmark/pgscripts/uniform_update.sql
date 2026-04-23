@@ -4,9 +4,10 @@
 \set nbranches	1
 \set ntellers	10
 \set naccounts	100000
+\set wset 01.6
 
 -- Transaction Variables
-\set aid random(1, :naccounts * :scale)
+\set aid random(1, :naccounts * :scale * :wset)
 \set bid random(1, :nbranches * :scale)
 \set tid random(1, :ntellers * :scale)
 \set delta random(-5000, 5000)
