@@ -444,8 +444,8 @@ SieveUnlinkAndAdvance(int32 buf_id)
 	{
 		int32		new_hand = newer; //step the hand forward
 
-		if (new_hand == NBuffers) //true if buf_id @ head
-			new_hand = older; // move head to prev instead
+		if (new_hand == NBuffers) //true if buf_id @ head, wrap to tail
+			new_hand = SievePrev[NBuffers];
 		SieveCtl->sieve_hand = new_hand;
 	}
 
@@ -1163,10 +1163,10 @@ StrategyInitialize(bool init)
 	/*
 	 * Get or create the shared strategy control block
 	 */
-	// ActiveEviction = &ClockSweepVtable;
-	// ActiveEviction = &SieveVtable;
+	//ActiveEviction = &ClockSweepVtable;
+	ActiveEviction = &SieveVtable;
 	// ActiveEviction = &LFUVtable;
-	ActiveEviction = &LRUVtable;
+	// ActiveEviction = &LRUVtable;
 
 	StrategyControl = (BufferStrategyCommon *)
 		ShmemInitStruct("Buffer Strategy Status",
