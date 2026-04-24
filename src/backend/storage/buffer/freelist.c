@@ -981,7 +981,7 @@ LFUGetBuffer(BufferAccessStrategy strategy, uint64 *buf_state)
 				BufferDesc *buf;
 				uint64		old_state;
 				uint64		new_state;
-				int32		next_candidate = LFUPrev[candidate];
+				int32		next_candidate = LFUNext[candidate];
 
 				buf       = GetBufferDescriptor(candidate);
 				old_state = pg_atomic_read_u64(&buf->state);
@@ -1279,10 +1279,10 @@ StrategyInitialize(bool init)
 	/*
 	 * Get or create the shared strategy control block
 	 */
-	//ActiveEviction = &ClockSweepVtable;
+	// ActiveEviction = &ClockSweepVtable;
 	// ActiveEviction = &SieveVtable;
-	// ActiveEviction = &LFUVtable;
-	ActiveEviction = &LRUVtable;
+	ActiveEviction = &LFUVtable;
+	// ActiveEviction = &LRUVtable;
 
 	StrategyControl = (BufferStrategyCommon *)
 		ShmemInitStruct("Buffer Strategy Status",
