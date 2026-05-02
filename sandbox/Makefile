@@ -11,6 +11,9 @@ sieve_test: sieve_test.c
 lru_test: lru_test.c
 	$(CC) $(CFLAGS) -o $@ $<
 
+lfu_test: lfu_test.c
+	$(CC) $(CFLAGS) -o $@ $<
+
 clean:
 	rm -f $(TESTS)
 
