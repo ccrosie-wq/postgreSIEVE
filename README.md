@@ -20,6 +20,10 @@ To change the policy, you must:
 - Rebuild using `make` and `sudo make install` in the root directory.
 - Start Postgres (use the `benchmark/collection_scripts/launch_db.sh`) script
 
+## Running Experiments and Benchmarks
+
+See the `benchmark/README.md` file. The contents of the benchmark folder are used to run all experiments.
+
 
 PostgreSQL Database Management System
 =====================================
