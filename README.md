@@ -1,3 +1,26 @@
+PostgreSIEVE
+============
+
+*Authors: Ryan Crosier, Will Garlington, Jackson Gilstrap*
+
+This codebase is a fork of Postgres implementing several bufferpool eviction policies.
+
+To get started, follow the [official installation instructions](https://www.postgresql.org/docs/devel/installation.html)
+
+    IMPORTANT: To run benchmarks with the scripts as given, YOU MUST have a postgres user as described in the installation instructions.
+
+## Changing Policies
+
+The main contribution in this codebase is the ability to change bufferpool eviction policies. Changing policies requires recompiling the codebase.
+
+To change the policy, you must:
+
+- Stop Postgres (use the `benchmark/collection_scripts/stop_db.sh`) script
+- Change the active eviction policy in the `src/backend/storage/buffer/freelist.c` file. Go to line 1282, comment out the currently selected eviction policy (called `ActiveEviction`), and uncomment the policy you'd like to use. 
+- Rebuild using `make` and `sudo make install` in the root directory.
+- Start Postgres (use the `benchmark/collection_scripts/launch_db.sh`) script
+
+
 PostgreSQL Database Management System
 =====================================
 
