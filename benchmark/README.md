@@ -2,26 +2,76 @@
 
 Scripts for launching the DB and collecting data using `pgbench`.
 
-## Benchmarking Scripts
+Prerequisites:
+- You have already followed the README in the root directory, built and installed postgres, and created the postgres user on your system
+- postgres user has read/write/execute permissions on the postgres data directory
 
+To run any of the scripts outlined in the next section, run the following:
+
+```bash
+$ cd collection_scripts
+$ ./<script_name>.sh
+```
+
+Each script will output the results of each individual experiment in a separate file (these files will be reported when the script completes). The format of output is the `pgbench` output format with the cache hit ratio added.
+
+# Collection Scripts Summary
+
+The main script used for benchmarking is `bench.sh`:
+
+```bash
+Usage:
+    -r read_weight (default 1)
+    -u update_weight (default 1)
+    -t time (s) (default 10)
+    -a alpha (default 1.5, only for zipfian distribution)
+    -b buffer_size (MB) (default 128)
+    -d distribution (default zipfian)
+    -c clients (default 12)
+    -w working_set_ratio (default 1, only for uniform distribution)
+    -p threads (default 2)
+```
+
+All the experiments invoke different configurations of this script to collect results. Our experiment scripts are these:
+- `ace_fig_c.sh`: Collect data for figure 10C of ACEing the Bufferpool.
+- `ace_fig_e.sh`: Collect data for figure 10E of ACEing the Bufferpool.
+- `ace_fig_e_uniform.sh`
+- `sieve_thruput_bench.sh`: create figure 6 from the SIEVE paper
+- `make_mem_charts.sh`: Collect data on every (given) permutation of memory sizes, r/w ratios, and query distributions.
+
+## Other Benchmarking Scripts
+
+These scripts are used by `bench.sh` to edit database configuration.
+
+- `init.sh`: initialize pgbench
 - `launch_db.sh`: launch database (if not already running) using the DB location "/usr/local/pgsql/data"
 - `stop_db.sh`: stop database using the DB location "/usr/local/pgsql/data"
-- `zipf_bench.sh` run pgbench using the `zipfian` scripts under the "pgscripts" directory. These scripts draw from a zipfian (skewed) distribution that is parameterized by an alpha, positively correlated with skewedness. The script takes a read weight, write weight, and alpha parameter.
-- `set_buffersize.sh`: Use the `-b` option in zipf_bench instead!
+- `set_buffersize.sh`: set the size of the buffercache and restart the DB
 
-## Data Aggregation
+## Transaction Scripts (stored in pgscripts dir)
 
-- `generate_plot.py`: given the output from a pgbench run, generate plots comparing the throughput for different read/write ratios
-
-## Scripts for pgbench
+These are the scripts that are used by `bench.sh` to perform queries and collect statistics.
 
 - `zipfian_select.sql/zipfian_update.sql` - simple select and update transactions that draw data from a skewed zipfian distribution
 - `uniform_select.sql/uniform_.sql` - simple select and update transactions that draw data from a uniform distribution. configurable size of working set.
+- `disable_autovacuum.sql/vacuum.sql` - these scripts disable postgres auto-vacuuming for the pgbench standard tables, and manually vacuum said tables respectively
+- `read_hits.sql/read_total.sql` - Read the number of buffercache hits and total buffercache accesses respectively. Used in tandem to calculate the hit/miss ratio for a given setup.
+- `reset_stats.sql` - clear the pgstats table used for reading hit ratio
 
-# Figure Generation Methodologies
+## Chart Generation Scripts
 
-- ACE Figure 10C: Set BP Size = 900 MB which should be about 6 percent of 15 GB. Set alpha = 1.01 in zipfian distribution to approximate a 90/10 data locality, such that the working set is only slightly larger than the BP (1.5GB vs 0.9 GB). Vary the r/w ratio by using pgbench weights. Run each test for 3 minutes on each implementation.
+These are the scripts used to turn raw output into bar charts. Not necessary for reproducing results.
 
-- ACE Figure 10E:
+- `generate_plot.py`: given the output from a pgbench run, generate plots comparing the throughput for different read/write ratios
 
-- SIEVE Figure 6: Set BP Size = working set size = unit set size * number of clients. In this case, we use a 90/10 locality w/ a 9/1 r/w ratio.
+    ```bash
+    usage: generate_plot.py [-h] input output title
+
+    positional arguments:
+      input       location of input files
+      output      directory to output files to
+      title       chart title
+
+    options:
+      -h, --help  show this help message and exit
+    ```
