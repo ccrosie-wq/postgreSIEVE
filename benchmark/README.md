@@ -4,9 +4,10 @@ Scripts for launching the DB and collecting data using `pgbench`.
 
 Prerequisites:
 - You have already followed the README in the root directory, built and installed postgres, and created the postgres user on your system
-- postgres user has read/write/execute permissions on the postgres data directory
+- `postgres` user has read/write/execute permissions on the postgres data directory
+- You have updated `collection_scripts/settings.env` to match your installation. This should be correct by default if you followed the official tutorial.
 
-To run any of the scripts outlined in the next section, run the following:
+To run any of the scripts outlined in the next section, run the following **as postgres user**:
 
 ```bash
 $ cd collection_scripts
@@ -75,3 +76,8 @@ These are the scripts used to turn raw output into bar charts. Not necessary for
     options:
       -h, --help  show this help message and exit
     ```
+
+# Miscellaneous Settings
+
+For some experiments in our project, we did not script required the changes because we did not need to do them often. These changes are:
+- Disable all disk accesses during benchmark: change `fsync` to "off" in your `postgres.conf` file and restart the database.

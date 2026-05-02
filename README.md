@@ -8,6 +8,8 @@ This codebase is a fork of Postgres implementing several bufferpool eviction pol
 To get started, follow the [official installation instructions](https://www.postgresql.org/docs/devel/installation.html)
 
     IMPORTANT: To run benchmarks with the scripts as given, YOU MUST have a postgres user as described in the installation instructions.
+    
+For our experiments, we set up the WAL on a separate device than the actual data. Follow [this post](https://postgresqldba-am.blogspot.com/2024/08/putting-pgwal-on-separate-device.html) to do the same on your system if you have multiple drives available.
 
 ## Changing Policies
 

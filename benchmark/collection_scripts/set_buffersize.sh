@@ -1,6 +1,6 @@
 #!/bin/bash
 
-PGCONF="/mnt/Storage/pgsql/data/postgresql.conf"
+source "settings.env"
 
 m="128"
 
@@ -17,8 +17,8 @@ done
 
 # replace buffer size in postgres configuration
 tmp=$(mktemp)
-sed "s/^\(shared_buffers =\).*/\1 ${m}MB/" $PGCONF > "$tmp"
-mv "$tmp" $PGCONF
+sed "s/^\(shared_buffers =\).*/\1 ${m}MB/" "$PG_CONF" > "$tmp"
+mv "$tmp" "$PG_CONF"
 
 if pg_isready; then
     echo "Postgres running, reloading conf..."
