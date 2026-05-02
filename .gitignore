@@ -58,4 +58,9 @@ reports/midway/*
 
 benchmark/env
 
+benchmark/charts_nolfu
+benchmark/charts_old
+benchmark/last_outputs
+benchmark/old_outputs
+
 .vscode

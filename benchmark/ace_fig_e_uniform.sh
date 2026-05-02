@@ -7,6 +7,6 @@ thread=6
 
 for size in "${SIZES[@]}"; do
     ./bench.sh -r 1 -u 1 -t 180 -b "$size" -d uniform -c "$client" -p $thread
-    mkdir -p "outputs/ace_fig_e_uniform/lru/bp_$size"
-    mv outputs/*.txt "outputs/ace_fig_e_uniform/lru/bp_$size"
+    mkdir -p "outputs/ace_fig_e_uniform_nosync/clock/bp_$size"
+    mv outputs/*.txt "outputs/ace_fig_e_uniform_nosync/clock/bp_$size"
 done

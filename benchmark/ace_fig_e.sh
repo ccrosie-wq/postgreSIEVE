@@ -6,8 +6,8 @@ client=12
 thread=6
 
 for size in "${SIZES[@]}"; do
-    ./bench.sh -r 1 -u 1 -t 180 -b "$size" -d zipfian -c "$client" -a 1.01 -p $thread
-    mkdir -p "outputs/ace_fig_e/clock/percent_$size"
-    mv outputs/*.txt "outputs/ace_fig_e/clock/bp_$size"
+    ./bench.sh -r 9 -u 1 -t 180 -b "$size" -d zipfian -c "$client" -a 1.01 -p "$thread"
+    mkdir -p "outputs/ace_fig_e_read_skewed_nosync_directio/clock/"
+    mv outputs/*.txt "outputs/ace_fig_e_read_skewed_nosync_12threads/clock/bp_$size.txt"
 done
 

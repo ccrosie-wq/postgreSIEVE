@@ -4,7 +4,7 @@
 \set nbranches	1
 \set ntellers	10
 \set naccounts	100000
-\set wset 01.6
+\set wset 1.0
 
 -- Transaction Variables
 \set aid random(1, :naccounts * :scale * :wset)

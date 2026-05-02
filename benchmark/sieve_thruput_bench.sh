@@ -12,9 +12,9 @@ for threads in "${THREADS[@]}"; do
 	client=$(echo "$CLIENTS_PER_THREAD * $threads" | bc)
 	w=0$(echo "0.1 * $threads" | bc)
 
-	./bench.sh -r 1 -u 1 -t 180 -b "$size" -d uniform -c "$client" -w "$w" -p $threads
+	./bench.sh -r 1 -u 1 -t 180 -b "$size" -d uniform -c "$client" -w "$w" -p "$threads"
 
-	mkdir -p "outputs/sieve_fig/sieve/${client}_clients_1_1"
-	mv outputs/*.txt "outputs/sieve_fig/sieve/${client}_clients_1_1"
+	mkdir -p "outputs/sieve_fig/lru/${client}_clients_1_1"
+	mv outputs/*.txt "outputs/sieve_fig/lru/${client}_clients_1_1"
 done
 

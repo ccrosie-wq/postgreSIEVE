@@ -18,8 +18,8 @@ class ExtractFormat:
 TPS = ExtractFormat("tps", float, " ", 2, "", "Transactions / Second")
 RATIO = ExtractFormat("ratio", float, " ", 1, "", "hits / total")
 LATENCY = ExtractFormat("latency", float, " ", 3, "", "ms")
-#DISPLAY_STATS = [TPS , RATIO, LATENCY]
-DISPLAY_STATS = [LATENCY]
+DISPLAY_STATS = [TPS , RATIO, LATENCY]
+# DISPLAY_STATS = [LATENCY]
 
 
 # indices of these values in the file names (split by _)
@@ -91,19 +91,19 @@ def main():
         chart_out = Path(args.output) / f'{stat.name}.png'
         
         x = np.arange(len(labels))
-        width = 0.25
+        width = 0.15
         multiplier = 0
         fig, ax = plt.subplots(layout='constrained')
         measure_max = 0
         pattern = 0
         for attr, measurement in values.items():
             offset = width*multiplier
-            rects = ax.bar(x+offset, measurement, width, label=attr)
+            rects = ax.bar(x+offset, measurement, width, label=attr.split('/')[1])
             for rect in rects:
                 rect.set_hatch(patterns[pattern])
                 pattern += 1
                 pattern %= len(patterns)
-            ax.bar_label(rects, padding=3)
+            # ax.bar_label(rects, padding=3)
             measure_max = max(measure_max, max(measurement))
             multiplier += 1
         

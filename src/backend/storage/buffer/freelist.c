@@ -23,11 +23,15 @@
 
 #define INT_ACCESS_ONCE(var)	((int)(*((volatile int *)&(var))))
 
+#define LFU_MAX_FREQ  1024   /* saturating cap; frequencies above this share one bucket */
+#define LFU_SENTINEL(f)      (NBuffers + (f) - 1)  /* f is 1-indexed, yields sentinel index */
+#define LFU_BUCKET_EMPTY(f)  (LFUNext[LFU_SENTINEL(f)] == LFU_SENTINEL(f))
+
 typedef enum EvictionPolicy
 {
     EVICTION_CLOCKSWEEP = 0,   // default
-    EVICTION_SIEVE      = 1,
-	  EVICTION_LFU		= 2,
+    EVICTION_SIEVE      = 1,   
+	  EVICTION_LFU		= 2,   
 } EvictionPolicy;
 
 
@@ -42,7 +46,7 @@ typedef struct
 	EvictionPolicy    active_policy;          // define policy
     uint32            completePasses;         //-- bgwriter: full traversal count
     pg_atomic_uint32  numBufferAllocs;        /* Buffers allocated since last reset */
-
+    
 	/*
 	 * Bgworker process to be notified upon activity or -1 if none. See
 	 * StrategyNotifyBgWriter.
@@ -55,8 +59,8 @@ static BufferStrategyCommon *StrategyControl = NULL;
 
 
 //addition for clocksweep
-typedef struct {
-	pg_atomic_uint32 nextVictimBuffer;
+typedef struct { 
+	pg_atomic_uint32 nextVictimBuffer; 
 } ClockSweepState;
 
 static ClockSweepState *ClockSweepCtl = NULL;
@@ -75,14 +79,14 @@ static int32      *SievePrev = NULL;
 
 typedef struct
 {
-	int32	lfu_hand;
-	int32 	bgw_sync_seq; //track sync pos for bgwriter
-
-	 // LFUFreq[] follow in shmem
+	int32	min_freq;     /* lower bound on lowest non-empty frequency bucket */
+	int32 	bgw_sync_seq;
 } LFUState;
 
-static LFUState *LFUCtl = NULL;
-static int32    *LFUFreq = NULL;
+static LFUState *LFUCtl  = NULL;
+static int32    *LFUFreq = NULL;  /* LFUFreq[buf_id]: access frequency (0 = not cached) */
+static int32    *LFUNext = NULL;  /* next ptrs: buf nodes [0..NBuffers-1], sentinels [NBuffers..NBuffers+LFU_MAX_FREQ-1] */
+static int32    *LFUPrev = NULL;  /* prev ptrs: same layout */
 
 typedef struct
 {
@@ -120,14 +124,15 @@ static BufferDesc *SieveGetBuffer(BufferAccessStrategy strategy, uint64 *buf_sta
 static void SieveNotifyInsert(BufferDesc *buf);
 static void SieveNotifyInvalidate(BufferDesc *buf);
 
-// delcare lfu funcs
-
+// declare lfu funcs
 static Size LFUShmemSize(int n_buffers);
 static void LFUInitialize(bool found);
 static BufferDesc *LFUGetBuffer(BufferAccessStrategy strategy, uint64 *buf_state);
 static void LFUNotifyInsert(BufferDesc *buf);
 static void LFUNotifyHit(BufferDesc *buf);
 static void LFUNotifyInvalidate(BufferDesc *buf);
+static void LFUBucketUnlink(int32 buf_id);
+static void LFUBucketInsertMRU(int32 buf_id, int32 freq);
 
 //declare lru funcs
 static Size LRUShmemSize(int n_buffers);
@@ -161,7 +166,7 @@ static const EvictionVtable SieveVtable = {
 
 // LFU refs
 static const EvictionVtable LFUVtable = {
-	.get_buffer        = LFUGetBuffer,
+	.get_buffer        = LFUGetBuffer,      
 	.notify_hit        = LFUNotifyHit,
 	.notify_insert     = LFUNotifyInsert,
 	.notify_invalidate = LFUNotifyInvalidate,
@@ -324,7 +329,7 @@ ClockSweepGetBuffer(BufferAccessStrategy strategy, uint64 *buf_state)
 
             if (BUF_STATE_GET_REFCOUNT(local_buf_state) != 0)
             {
-                if (--trycounter == 0)
+                if (--trycounter == 0) 
 				{
 					/*
 					 * We've scanned all the buffers without making any state
@@ -428,7 +433,7 @@ SieveAdvanceHand(void)
 	{ //curr was at head, wrap around to tail
 		next = SievePrev[NBuffers];
 		// StrategyControl->completePasses++; // increment to signal loop, fix bug
-	}
+	}	
 	SieveCtl->sieve_hand = next;
 }
 
@@ -444,8 +449,8 @@ SieveUnlinkAndAdvance(int32 buf_id)
 	{
 		int32		new_hand = newer; //step the hand forward
 
-		if (new_hand == NBuffers) //true if buf_id @ head, wrap to tail
-			new_hand = SievePrev[NBuffers];
+		if (new_hand == NBuffers) //true if buf_id @ head
+			new_hand = older; // move head to prev instead
 		SieveCtl->sieve_hand = new_hand;
 	}
 
@@ -589,7 +594,7 @@ SieveGetBuffer(BufferAccessStrategy strategy, uint64 *buf_state)
 ////////////////////////////////////////////////////////////
 
 static Size
-LRUShmemSize(int n_buffers)
+LRUShmemSize(int n_buffers) 
 {
 	//init normal struct
 	//another 'faux-d-link-list' w/ arrs
@@ -601,7 +606,7 @@ static void
 LRUInitialize(bool found)
 {
 	int i;
-
+	
 	LRUNext = (int32 *)(LRUCtl + 1); //
 	LRUPrev = LRUNext + (NBuffers + 1);
 
@@ -629,7 +634,7 @@ LRUGetBuffer(BufferAccessStrategy strategy, uint64 *buf_state)
 
 	candidate_id = LRUPrev[NBuffers];//just get the tail.......
 
-	for (;;)
+	for (;;) 
 	{
 		BufferDesc *buf;
 		uint64 old_buf_state;
@@ -667,7 +672,7 @@ LRUGetBuffer(BufferAccessStrategy strategy, uint64 *buf_state)
 			if (strategy != NULL) {
 				AddBufferToRing(strategy, buf);
 			}
-
+			
 			*buf_state = new_buf_state;
 			TrackNewBufferPin(BufferDescriptorGetBuffer(buf));
 			SpinLockRelease(&StrategyControl->buffer_strategy_lock);
@@ -733,7 +738,7 @@ LRUInsertMRU(int32 buf_id)
 
 /// end help
 
-static void
+static void 
 LRUNotifyHit(BufferDesc *buf)
 {
 	int32 buf_id = buf->buf_id;
@@ -794,126 +799,229 @@ LRUNotifyInvalidate(BufferDesc *buf)
 static Size
 LFUShmemSize(int n_buffers)
 {
-	return sizeof(LFUState) + n_buffers * sizeof(int32);
+	return sizeof(LFUState)
+		 + n_buffers * sizeof(int32)                           /* LFUFreq */
+		 + 2 * (n_buffers + LFU_MAX_FREQ) * sizeof(int32);    /* LFUNext + LFUPrev */
 }
 
 static void
 LFUInitialize(bool found)
 {
 	LFUFreq = (int32 *) (LFUCtl + 1);
+	LFUNext = LFUFreq + NBuffers;
+	LFUPrev = LFUNext + (NBuffers + LFU_MAX_FREQ);
 
-	if (!found) {
-		int i;
-		LFUCtl ->lfu_hand = 0;
-		LFUCtl ->bgw_sync_seq = 0;
+	if (!found)
+	{
+		int   i;
+		int32 s;
 
-		for(i = 0; i < NBuffers; i++) {
-			LFUFreq[i] = 0;
+		LFUCtl->min_freq     = 1;
+		LFUCtl->bgw_sync_seq = 0;
+
+		/* init every sentinel to point to itself = empty bucket */
+		for (i = 1; i <= LFU_MAX_FREQ; i++)
+		{
+			s = LFU_SENTINEL(i);
+			LFUNext[s] = s;
+			LFUPrev[s] = s;
+		}
+
+		/*
+		 * Pre-link all buffers into bucket[1] so GetBuffer can find them
+		 * before any page has been loaded (mirrors LRU/SIEVE init).
+		 * Buffer 0 is the LRU end (evicted first); NBuffers-1 is the MRU end.
+		 */
+		s = LFU_SENTINEL(1);
+		LFUNext[s] = NBuffers - 1; /* head = MRU end */
+		LFUPrev[s] = 0;             /* tail = LRU end, eviction target */
+
+		for (i = 0; i < NBuffers; i++)
+		{
+			LFUFreq[i] = 1;
+			LFUNext[i] = (i < NBuffers - 1) ? i + 1 : s; /* toward MRU */
+			LFUPrev[i] = (i > 0)             ? i - 1 : s; /* toward LRU */
 		}
 	}
+}
+
+/*
+ * LFUBucketUnlink - remove buf_id from its current frequency bucket.
+ * Caller must hold buffer_strategy_lock. LFUFreq[buf_id] must be non-zero.
+ */
+static void
+LFUBucketUnlink(int32 buf_id)
+{
+	int32 s    = LFU_SENTINEL(LFUFreq[buf_id]);
+	int32 next = LFUNext[buf_id]; /* toward MRU */
+	int32 prev = LFUPrev[buf_id]; /* toward LRU */
+
+	if (next == s)
+		LFUNext[s] = prev; /* buf_id was MRU head */
+	else
+		LFUPrev[next] = prev;
+
+	if (prev == s)
+		LFUPrev[s] = next; /* buf_id was LRU tail */
+	else
+		LFUNext[prev] = next;
+
+	LFUNext[buf_id] = NBuffers;
+	LFUPrev[buf_id] = NBuffers;
+}
+
+/*
+ * LFUBucketInsertMRU - insert buf_id at the MRU (head) end of bucket[freq].
+ * Caller must hold buffer_strategy_lock.
+ */
+static void
+LFUBucketInsertMRU(int32 buf_id, int32 freq)
+{
+	int32 s        = LFU_SENTINEL(freq);
+	int32 old_head = LFUNext[s]; /* current MRU item */
+
+	LFUNext[buf_id] = s;        /* new node points toward sentinel as "next" */
+	LFUPrev[buf_id] = old_head; /* new node points toward old head as "prev" */
+
+	if (old_head == s)
+		LFUPrev[s] = buf_id;    /* bucket was empty: new node is also LRU tail */
+	else
+		LFUNext[old_head] = buf_id;
+
+	LFUNext[s] = buf_id;        /* sentinel's head = new node */
 }
 
 static void
 LFUNotifyInsert(BufferDesc *buf)
 {
+	int32 buf_id = buf->buf_id;
+
 	SpinLockAcquire(&StrategyControl->buffer_strategy_lock);
-	LFUFreq[buf->buf_id] = 1; //set to 1
+
+	if (LFUFreq[buf_id] != 0)
+		LFUBucketUnlink(buf_id);   /* re-insert: remove from old bucket first */
+
+	LFUFreq[buf_id] = 1;
+	LFUBucketInsertMRU(buf_id, 1);
+	LFUCtl->min_freq = 1;          /* always correct after any insert */
+
 	SpinLockRelease(&StrategyControl->buffer_strategy_lock);
 }
 
 static void
 LFUNotifyHit(BufferDesc *buf)
 {
+	int32 buf_id = buf->buf_id;
+	int32 f, new_f;
+
 	SpinLockAcquire(&StrategyControl->buffer_strategy_lock);
-	LFUFreq[buf->buf_id] ++; //increment on hit
+
+	f = LFUFreq[buf_id];
+	if (f == 0)
+	{
+		/* buffer already evicted, nothing to update */
+		SpinLockRelease(&StrategyControl->buffer_strategy_lock);
+		return;
+	}
+
+	new_f = (f < LFU_MAX_FREQ) ? f + 1 : LFU_MAX_FREQ; /* saturating increment */
+
+	LFUBucketUnlink(buf_id);
+
+	/* advance min_freq only if we just emptied the bucket it pointed at */
+	if (f == LFUCtl->min_freq && LFU_BUCKET_EMPTY(f))
+		LFUCtl->min_freq = new_f;
+
+	LFUFreq[buf_id] = new_f;
+	LFUBucketInsertMRU(buf_id, new_f); /* re-insert refreshes recency even when new_f == f */
+
 	SpinLockRelease(&StrategyControl->buffer_strategy_lock);
 }
 
 static void
 LFUNotifyInvalidate(BufferDesc *buf)
 {
+	int32 buf_id = buf->buf_id;
+
 	SpinLockAcquire(&StrategyControl->buffer_strategy_lock);
-	LFUFreq[buf->buf_id] = 0; //reset on invalidate
+
+	if (LFUFreq[buf_id] != 0)
+	{
+		LFUBucketUnlink(buf_id);
+		LFUFreq[buf_id] = 0;
+		/* leave min_freq as-is: next insert resets it to 1 */
+	}
+
 	SpinLockRelease(&StrategyControl->buffer_strategy_lock);
 }
 
 /*
  * LFUGetBuffer
  *
- * Scan all buffers starting from lfu_hand, find the unpinned buffer
- * with the lowest frequency count, and evict it.  O(n) per eviction
- * which matches ClockSweep's worst case.
+ * Walk frequency buckets from min_freq upward. Within each bucket evict
+ * from the LRU end (LFUPrev[sentinel]). O(1) in the common case — the
+ * first candidate in the lowest-frequency bucket is unpinned.
  */
 static BufferDesc *
 LFUGetBuffer(BufferAccessStrategy strategy, uint64 *buf_state)
 {
 	SpinLockAcquire(&StrategyControl->buffer_strategy_lock);
 
-	for (;;)
+	for (;;) /* retry loop on CAS failure */
 	{
-		int32		min_freq   = INT32_MAX;
-		int32		min_buf_id = -1;
-		int			i;
-		int32		scan_start = LFUCtl->lfu_hand;
+		int32 f;
 
-		/* Phase 1: full scan to find minimum frequency among evictable bufs */
-		for (i = 0; i < NBuffers; i++)
+		for (f = LFUCtl->min_freq; f <= LFU_MAX_FREQ; f++)
 		{
-			int32		candidate = (scan_start + i) % NBuffers;
-			BufferDesc *buf;
-			uint64		local_state;
+			int32 s         = LFU_SENTINEL(f);
+			int32 candidate = LFUPrev[s]; /* LRU end of this bucket */
 
-			buf         = GetBufferDescriptor(candidate);
-			local_state = pg_atomic_read_u64(&buf->state);
-
-			/* skip pinned or locked buffers */
-			if (BUF_STATE_GET_REFCOUNT(local_state) != 0)
-				continue;
-			if (unlikely(local_state & BM_LOCKED))
-				continue;
-
-			if (LFUFreq[candidate] < min_freq)
+			while (candidate != s)
 			{
-				min_freq   = LFUFreq[candidate];
-				min_buf_id = candidate;
+				BufferDesc *buf;
+				uint64		old_state;
+				uint64		new_state;
+				int32		next_candidate = LFUNext[candidate];
+
+				buf       = GetBufferDescriptor(candidate);
+				old_state = pg_atomic_read_u64(&buf->state);
+
+				if (unlikely(old_state & BM_LOCKED) ||
+					BUF_STATE_GET_REFCOUNT(old_state) != 0)
+				{
+					candidate = next_candidate;
+					continue;
+				}
+
+				new_state = old_state + BUF_REFCOUNT_ONE;
+				if (pg_atomic_compare_exchange_u64(&buf->state, &old_state, new_state))
+				{
+					LFUBucketUnlink(candidate);
+					LFUFreq[candidate] = 0;
+					if (LFU_BUCKET_EMPTY(f))
+						LFUCtl->min_freq = f; /* hint: still correct as lower bound */
+
+					if (strategy != NULL)
+						AddBufferToRing(strategy, buf);
+
+					*buf_state = new_state;
+					TrackNewBufferPin(BufferDescriptorGetBuffer(buf));
+					SpinLockRelease(&StrategyControl->buffer_strategy_lock);
+					return buf;
+				}
+				/* CAS failed — buffer was pinned by a race; restart from min_freq */
+				goto outer_retry;
 			}
+
+			/* bucket f is empty or fully pinned — advance hint */
+			if (LFU_BUCKET_EMPTY(f))
+				LFUCtl->min_freq = f + 1;
 		}
 
-		if (min_buf_id == -1)
-		{
-			SpinLockRelease(&StrategyControl->buffer_strategy_lock);
-			elog(ERROR, "no unpinned buffers available");
-		}
+		SpinLockRelease(&StrategyControl->buffer_strategy_lock);
+		elog(ERROR, "no unpinned buffers available");
 
-		/* Phase 2: try to claim the victim via CAS */
-		{
-			BufferDesc *buf       = GetBufferDescriptor(min_buf_id);
-			uint64		old_state = pg_atomic_read_u64(&buf->state);
-			uint64		new_state;
-
-			/* re-check: may have been pinned/locked between scan and claim */
-			if (BUF_STATE_GET_REFCOUNT(old_state) != 0 ||
-				unlikely(old_state & BM_LOCKED))
-				continue;   /* retry full scan */
-
-			new_state = old_state + BUF_REFCOUNT_ONE;
-			if (pg_atomic_compare_exchange_u64(&buf->state, &old_state,
-											   new_state))
-			{
-				/* evict: reset freq, advance hand past victim */
-				LFUFreq[min_buf_id] = 0;
-				LFUCtl->lfu_hand = (min_buf_id + 1) % NBuffers;
-
-				if (strategy != NULL)
-					AddBufferToRing(strategy, buf);
-
-				*buf_state = new_state;
-				TrackNewBufferPin(BufferDescriptorGetBuffer(buf));
-				SpinLockRelease(&StrategyControl->buffer_strategy_lock);
-				return buf;
-			}
-		}
-		/* CAS failed, retry full scan */
+outer_retry:;
 	}
 }
 
@@ -1018,7 +1126,7 @@ StrategySyncStart(uint32 *complete_passes, uint32 *num_buf_alloc)
 		// *complete_passes = StrategyControl->completePasses;
 		uint32 seq = (uint32) ++SieveCtl->bgw_sync_seq;
 		result = seq % NBuffers;
-
+		
 		if (complete_passes)
           *complete_passes = seq / NBuffers;
 	}
@@ -1030,6 +1138,14 @@ StrategySyncStart(uint32 *complete_passes, uint32 *num_buf_alloc)
 		if (complete_passes) {
 			*complete_passes = seq / NBuffers;
 		}
+	}
+	else if (ActiveEviction == &LFUVtable)
+	{
+		uint32 seq = (uint32) ++LFUCtl->bgw_sync_seq;
+		result = seq % NBuffers;
+
+		if (complete_passes)
+			*complete_passes = seq / NBuffers;
 	}
 	else
 	{
@@ -1122,16 +1238,16 @@ StrategyShmemSize(void)
 
 	/* size of the shared replacement strategy control block */
 	//size the new common struct + target struct
-
+  
 	// size = add_size(size, MAXALIGN(sizeof(BufferStrategyCommon) + sizeof(ClockSweepState)));
 
 	size = add_size(size, MAXALIGN(sizeof(BufferStrategyCommon) +
 		Max(sizeof(ClockSweepState),
-			Max(sizeof(SieveState) + 2 * (NBuffers + 1) * sizeof(int32),
-          		Max(sizeof(LFUState) + (NBuffers + 1) * sizeof(int32),
-				sizeof(LRUState)   + 2 * (NBuffers + 1) * sizeof(int32))))));
+			Max(SieveShmemSize(NBuffers),
+				Max(LFUShmemSize(NBuffers),
+					LRUShmemSize(NBuffers))))));
 
-	//change alloc one policy selection in place?
+		//change alloc one policy selection in place?
 	return size;
 }
 
@@ -1163,27 +1279,26 @@ StrategyInitialize(bool init)
 	/*
 	 * Get or create the shared strategy control block
 	 */
-	//ActiveEviction = &ClockSweepVtable;
-	ActiveEviction = &SieveVtable;
-	// ActiveEviction = &LFUVtable;
+	// ActiveEviction = &ClockSweepVtable;
+	// ActiveEviction = &SieveVtable;
+	ActiveEviction = &LFUVtable;
 	// ActiveEviction = &LRUVtable;
 
 	StrategyControl = (BufferStrategyCommon *)
 		ShmemInitStruct("Buffer Strategy Status",
 						MAXALIGN(sizeof(BufferStrategyCommon) +
 								 Max(sizeof(ClockSweepState),
-									Max(sizeof(SieveState) +
-									 2 * (NBuffers + 1) * sizeof(int32),
-									 Max(sizeof(LFUState) + (NBuffers + 1) * sizeof(int32),
-										 sizeof(LRUState) + 2 * (NBuffers + 1) * sizeof(int32))))),
+									Max(SieveShmemSize(NBuffers),
+										Max(LFUShmemSize(NBuffers),
+											LRUShmemSize(NBuffers))))),
 						&found);
 
-
+	
 	ClockSweepCtl = (ClockSweepState *)((char *) StrategyControl + sizeof(BufferStrategyCommon));
 	SieveCtl      = (SieveState *)     ((char *) StrategyControl + sizeof(BufferStrategyCommon));
 	LFUCtl        = (LFUState *)       ((char *) StrategyControl + sizeof(BufferStrategyCommon));
 	LRUCtl		  = (LRUState *)       ((char *) StrategyControl + sizeof(BufferStrategyCommon));
-
+	
 	if (!found)
 	{
 		/*

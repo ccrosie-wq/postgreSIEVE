@@ -4,7 +4,7 @@
 \set nbranches	1
 \set ntellers	10
 \set naccounts	100000
-\set alpha 1.5
+\set alpha 1.01
 
 -- Transaction Variables
 \set aid random_zipfian(1, :naccounts * :scale, :alpha)
