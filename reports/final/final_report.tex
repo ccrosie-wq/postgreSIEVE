@@ -69,6 +69,19 @@ This persistent trade off between simplicity and efficiency has been continuousl
 The authors categorize SIEVE as a cache eviction primitive similar to LRU or FIFO. Structurally, it is built upon a single FIFO queue and utilizes a "moving hand" pointer to track whether data has been recently accessed. 
 This hand scans from the tail toward the head of the queue, resetting the "visited" bit of objects it encounters. An object is only evicted if its visited bit is 0; otherwise, it is retained in its original position, effectively "sifting" the cache to preserve popular data. 
 
+\section{Benchmarking}
+
+\subsection{Hardware}
+
+We perform all of our evaluations on a system running Linux Mint (a Debian fork). The system has an AMD Ryzen 5 5600X CPU with 6 Cores at 3.7GHz base clock, and 32 GB of DDR4 memory. The system is equipped with two storage devices: a 256 GB SATA SSD and a 1 TB NVMe SSD.
+
+\subsection{Postgres Setup}
+
+Postgres data is stored on the NVMe SSD for every test, and the WAL is stored on the SATA SSD. Benchmarks use the standard pgbench tables with auto-vacuuming disabled. The tables are vacuumed manually after each test to ensure a clean database for the next test.
+
+\subsection{Pgbench Workloads}
+
+We test over various workloads with different data localities and read/write ratios. For a skewed workload, we draw points from a Zipfian distribution with $\alpha=1.01$.
 
 % =============================================================================
 \section{Conclusion}
