@@ -11,6 +11,7 @@ alpha=1.5
 dist="zipfian"
 w=1.0
 threads=2
+clients=12
 
 while getopts ":r:u:t:a:b:d:c:w:p:" opt; do
   case $opt in
@@ -58,6 +59,7 @@ hits_init=$(psql --csv -f pgscripts/read_hits.sql postgres | awk 'NR==2')
 total_init=$(psql --csv -f pgscripts/read_total.sql postgres | awk 'NR==2')
 
 # run the benchmark
+mkdir outputs
 bench_file=outputs/$(date -Iseconds)_${read_weight}_${update_weight}_${alpha}.txt
 pgbench -c ${clients} -j "${threads}" -s ${SCALE_FACTOR} -T "${time}" -f pgscripts/${dist}_select.sql@"${read_weight}" -f pgscripts/${dist}_update.sql@"${update_weight}" postgres >> "$bench_file"
 

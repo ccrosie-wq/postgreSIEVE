@@ -7,7 +7,20 @@ Prerequisites:
 - `postgres` user has read/write/execute permissions on the postgres data directory
 - You have updated `collection_scripts/settings.env` to match your installation. This should be correct by default if you followed the official tutorial.
 
-To run any of the scripts outlined in the next section, run the following **as postgres user**:
+To run any of the scripts outlined in the next section, first ensure that postgres owns the transaction scripts:
+
+```bash
+$ sudo chown -R postgres collection_scripts/pgscripts
+```
+
+Then, initialize the pgbench tables using `init.sh`:
+
+```bash
+$ cd collection_scripts
+$ ./init.sh
+```
+
+Then, run any of the scripts *as postgres user*:
 
 ```bash
 $ cd collection_scripts
