@@ -47,14 +47,14 @@ The most successful cache eviction policy introduced in recent years is SIEVE \c
 
 \subsection{Problem Statement}
 
-The problem we are exploring is whether or not there are workloads for which SIEVE outperforms other simple eviction policies for the bufferpool in PostgreSQL. By default PostgreSQL uses the CLOCK algorithm for buffer cache eviction, we also implemented LRU as another point of comparison. We then explored workloads with varying data skews to determine whether would SIEVE grant performance benefits or reduce write amplification.
+The problem we explored is whether or not there are workloads for which SIEVE outperforms other simple eviction policies for the bufferpool in PostgreSQL. By default PostgreSQL uses the CLOCK algorithm for buffer cache eviction, we also implemented LRU as another point of comparison. We then explored workloads with varying data skews to determine whether SIEVE would grant performance benefits or reduce write amplification.
 
 \subsection{Contributions}
 
 We make the following contributions:
 
 \begin{itemize}
-    \item We implement a framework in PostgreSQL for implementing and switching between different buffer cache eviction policies at compile time.
+    \item We implemented a framework in PostgreSQL for implementing and switching between different buffer cache eviction policies at compile time.
     \item We present results indicating that SIEVE does not offer any significant performance benefits over CLOCK in skewed and mixed workloads.
 \end{itemize}
 
