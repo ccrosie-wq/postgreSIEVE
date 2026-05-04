@@ -1,7 +1,6 @@
 # Benchmarking Tools
 
 Scripts for launching the DB and collecting data using `pgbench`.
-
 Prerequisites:
 - You have already followed the README in the root directory, built and installed postgres, and created the postgres user on your system
 - `postgres` user has read/write/execute permissions on the postgres data directory
