@@ -32,7 +32,7 @@
 }
 
 \begin{abstract}
-    The buffer cache is a key data structure in the DBMS that helps reduce unecessary disk I/Os. Eviction policies help determine when data in a cache is no longer needed and removes it, creating room for new data. Some of the most common algorithms are Least Recently Used (LRU), Least Frequently Used (LFU), First In First Out (FIFO), and many others. PostgreSQL uses the CLOCK \bad{citethis} algorithm, a modification of LRU designed to minimize the overhead of maintaining an ordered list of recently used pages. For our project, we implement SIEVE, an eviction policy originally designed as an LRU alternative for web caches, into PostgreSQL. SIEVE is advantageous due to its lock-less design and its ability to be integrated into existing cache architectures. Whilst SIEVE was originally made for the web, there could be possible use for it in database systems such as PostgreSQL. Our experiments benchmark Sieve against other eviction policies using \textit{pgbench}. We find that SIEVE provides little (if any) improvement in terms of throughput and cache-hit ratio over the default buffer cache eviction policy on mixed and skewed workloads.
+    The buffer cache is a key data structure in the DBMS that helps reduce unnecessary disk I/Os. Eviction policies govern the removal of stale or infrequently accessed data, making room for new entries. Some of the most common eviction algorithms are Least Recently Used (LRU), Least Frequently Used (LFU), and First In First Out (FIFO). PostgreSQL uses CLOCK Sweep \bad{citethis}, a modification of the LRU algorithm designed to minimize the overhead of maintaining an ordered list of recently used pages. For our project, we implement SIEVE, an eviction policy originally designed as an LRU alternative for web caches into PostgreSQL. SIEVE is advantageous due to its lock-free design and its ability to be easily integrated into existing cache architectures. Whilst SIEVE was originally made for the web, there may be interesting use for it in database systems such as PostgreSQL. Our experiments benchmark SIEVE against other eviction policies using \textit{pgbench}. We find that SIEVE provides little (if any) improvement in terms of throughput and cache-hit ratio over the default buffer cache eviction policy on mixed and skewed workloads.
 \end{abstract}
 
 \maketitle
@@ -47,7 +47,7 @@ The most successful cache eviction policy introduced in recent years is SIEVE \c
 
 \subsection{Problem Statement}
 
-The problem we are exploring is whether or not there are workloads for which SIEVE outperforms other simple eviction policies for the bufferpool in PostgreSQL. PostgreSQL uses the CLOCK algorithm for buffer cache eviction by default and we will also implement LRU as another point of comparison. We will then explore workloads with different data skews and determine whether SIEVE grants any performance benefits or reduces write amplification.
+The problem we are exploring is whether or not there are workloads for which SIEVE outperforms other simple eviction policies for the bufferpool in PostgreSQL. By default PostgreSQL uses the CLOCK algorithm for buffer cache eviction, we also implemented LRU as another point of comparison. We then explored workloads with varying data skews to determine whether would SIEVE grant performance benefits or reduce write amplification.
 
 \subsection{Contributions}
 
@@ -62,10 +62,9 @@ We make the following contributions:
 % =============================================================================
 \section{Background}
 % =============================================================================
-For decades cache eviction has been primarily dominated by very simple primitive algorithms such as First In First Out(FIFO) and Least Recently Used (LRU). 
-More complex algorithms such as Adaptive Replacement Cache (ARC) typically tend to have better results, however require the developer to implement hundreds of lines of code. 
-This persistent trade off between simplicity and efficiency has been continuously discussed and researched in system research. 
-\cite{SIEVE}SIEVE is a recent advancement in this space, originally designed for and evaluated against web cache workloads. 
+For decades, cache eviction has been primarily dominated by primitive algorithms such as First In First Out (FIFO) and Least Recently Used (LRU). 
+More complex algorithms such as Adaptive Replacement Cache (ARC) typically have better results by exploiting different parts of the system to account for weaknesses in the aforementioned algorithms; however require the developer to implement hundreds of lines of code. 
+This persistent trade-off between ease of implementation and performance has been continuously discussed and researched in system research. As discussed in recent work \cite{SIEVE} SIEVE is a recent advancement in this space, originally designed for and evaluated against web cache workloads. 
 The authors categorize SIEVE as a cache eviction primitive similar to LRU or FIFO. Structurally, it is built upon a single FIFO queue and utilizes a "moving hand" pointer to track whether data has been recently accessed. 
 This hand scans from the tail toward the head of the queue, resetting the "visited" bit of objects it encounters. An object is only evicted if its visited bit is 0; otherwise, it is retained in its original position, effectively "sifting" the cache to preserve popular data. 
 
@@ -75,7 +74,7 @@ This hand scans from the tail toward the head of the queue, resetting the "visit
 
 \subsection{Buffer Policy Framework}
 
-To facilitate the testing of several eviction policies in a common 'environment', we've implemented an eviction pollicy framework on which all policies can be built. This framework is made up of two primary components: a BufferStrategyCommon which holds a buffer lock and other policy data, and an EvictionVtable which defines virtual functions to be implemented by new policies. Because \emph{freelist.c}, where eviction logic is implemented, does not dictate when or how buffers enter or leave the buffer pool, our virtual functions can focus purely on the mechanics of evictions and insertions.
+To facilitate the testing of several eviction policies in a common 'environment', we've implemented an eviction policy framework on which all policies can be built. This framework is made up of two primary components: a BufferStrategyCommon which holds a buffer lock and other policy data, and an EvictionVtable which defines virtual functions to be implemented by new policies. Because \emph{freelist.c}, where eviction logic is implemented, does not dictate when or how buffers enter or leave the buffer pool, our virtual functions can focus purely on the mechanics of evictions and insertions.
 
 \subsection{Sieve Implementation}
 
