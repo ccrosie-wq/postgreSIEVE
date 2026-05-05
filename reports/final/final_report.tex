@@ -41,6 +41,15 @@
 \maketitle
 
 % =============================================================================
+\section{Fake Results}
+% =============================================================================
+Our results show that in the SQL use case we tested, SIEVE does show signs of slightly improved performance for very small buffers, but this difference in performance disappears as buffer size increases.
+Figure X shows these results most clearly, where SIEVE outperforms CLOCK in latency across all R/W rations for the 900MB bufferpool. 
+Interestingly, despite the higher latency, CLOCK seems to maintain a slight edge in cache hit rations on all buffer sizes with write heavy workloads.
+When comparing throughput and read ratio, we see very little variance in performance between the policies across read ratios, however we do see that LRU falls behind the others for uniform queries.
+Significantly, our results show that transaction throughput of SIEVE scales sublinearly in-line with CLOCK and LRU, and below the linear sclaing observed by the SIEVE authors.
+
+% =============================================================================
 \section{Introduction}
 % =============================================================================
 
