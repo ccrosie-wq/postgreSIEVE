@@ -125,7 +125,13 @@ Our results show that in the SQL use case we tested, SIEVE does show signs of sl
     \label{fig:ziplateight}
 \end{figure}
 
-Figures \ref{fig:unilatnine} and \ref{fig:ziplatnine} show these results most clearly, where SIEVE outperforms CLOCK in latency across all R/W rations for the 900MB bufferpool. Despite the higher latency, CLOCK seems to maintain a slight edge in cache hit rations on all buffer sizes with write heavy workloads. 
+Figures \ref{fig:unilatnine}, \ref{fig:ziplatnine}, and \ref{fig:percents} show these results most clearly. SIEVE outperforms CLOCK in latency across all R/W ratios for the 900 MB bufferpool and uniform query workload, and is within 1 percent performance for all skewed workloads. Despite CLOCK's often higher latency, it maintains a slight edge in cache hit ratios on all buffer sizes with write heavy workloads. 
+
+\begin{figure}
+    \includegraphics[width=1\linewidth]{images/percents.png}
+    \caption{Speedups of SIEVE and LRU vs Clock.}
+    \label{fig:percents}
+\end{figure}
 
 \begin{figure}
     \includegraphics[width=0.7\linewidth]{images/uni_ratio_900.png}
