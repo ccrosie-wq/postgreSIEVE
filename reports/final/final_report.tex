@@ -170,7 +170,7 @@ When measuring throughput over different read ratios in Figures \ref{fig:tputrws
     \label{fig:tputrwuni}
 \end{figure}
 
-Significantly, the transaction throughput of SIEVE in our experiments exhibited sublinear scaling in-line with CLOCK and LRU (Figure~\ref{fig:sublin}), and below the linear scaling observed in Figure 6 of~\cite{SIEVE}. We have tried to closely replicate the conditions under which the original scaling was seen, but have not seen the same performance characteristics. This could be due to a number of factors, but we believe that it is likely due to the different database environments these tests were run in. The datasets used in~\cite{SIEVE} are KV-cache traces from real-world systems replayed in a test environment. Postgres is likely to have significantly different indexing structures than a KV-cache. Along with the relational schema, we believe that these differences could hide any performance benefits observed in the context of the original paper. It is also possible that our synthetic benchmarks are not a comparable workload to the traces used in SIEVE. If we had more time, we would try and set up this benchmark in a Postgres environment.
+Significantly, the transaction throughput of SIEVE in our experiments exhibited sublinear scaling in-line with CLOCK and LRU (Figure~\ref{fig:sublin}), and below the linear scaling observed in Figure 6 of~\cite{SIEVE}. We have tried to closely replicate the conditions under which the original scaling was seen, but have not seen the same performance characteristics. This could be due to a number of factors, but we believe that it is likely due to the different database environments these tests were run in. The datasets used in~\cite{SIEVE} are KV-cache traces from real-world systems replayed in a test environment. Postgres is likely to have significantly different indexing structures than a KV-cache. Along with the relational schema, we believe that these differences could hide any performance benefits observed in the context of the original paper. It is also possible that our synthetic benchmarks are not a comparable workload to the traces used in SIEVE. \bad{If we had more time}Given more time, we would try and set up this benchmark in a Postgres environment.
 
 \begin{figure}
     \includegraphics[width=0.7\linewidth]{images/tput_scaling.png}
@@ -199,8 +199,12 @@ Ultimately, we were unable to determine the cause of the bottleneck in this test
 % =============================================================================
 \section{Conclusion}
 % =============================================================================
-We presented our implementation and findings on SIEVE a cache eviction primitive within PostgreSQL. We show from our results that SIEVE does show promise on small buffer sizes with better average latency on zipfian and uniform queries, however that advantage does diminish as the buffer size increases. We do note that it is possible that our sythetic benchmarks are not comparable to the traces used in the orginal \cite{SIEVE}SIEVE paper which could be why our similar or super significant results. The authors of SIEVE explicitly mention that SIEVE was not scan resisitant and would not exhibit the same performance gains that it would on non scan workloads. This is a gap we acknowlege during our experiments and would aim to explore scan heavy workloads in future developement/work
-
+We presented our implementation and findings on SIEVE, a cache eviction primitive within PostgreSQL. 
+We show from our results that SIEVE does show promise on small buffer sizes with better average latency on zipfian and uniform queries, however that advantage does diminish as the buffer size increases. 
+We also note that it is possible that our sythetic benchmarks are not comparable to the traces used in the orginal \cite{SIEVE}SIEVE paper which could \bad{be why our similar or super significant results.}
+The authors of SIEVE explicitly mention that SIEVE was not \bad{scan resisitant?} and would exhibit performance drops on non-scan workloads. 
+\bad{This is a gap we acknowlege during our experiments and would aim to explore scan heavy workloads in future developement/work}
+While we acknowledge this gap in our experimentation, serious concerns about scan performance could render future work into this concept an exercise in futility.
 
 % reference
 {
