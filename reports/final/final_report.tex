@@ -89,7 +89,12 @@ To facilitate the testing of several eviction policies in a common 'environment'
 
 \subsection{Sieve Implementation}
 
-Our SIEVE implementation was designed with static arrays to minimize the overhead of memory reallocation. Two static arrays sized to \emph{NBuffers}, the number of buffers allowed in the pool, combine to recreate the behavior of a linked list. Each insertion or \emph{GetBuffer} (find victim) call is treated as an atomic action where a Spinlock is held until the function completes. After every insertion or deletion, the ID of the buffer is used to access the array and either mark the buffer as the new head (insertion) or designate the buffer as unreachable (eviction).
+Our SIEVE implementation was designed with static arrays to minimize the overhead of memory reallocation. 
+Two static arrays sized to \emph{NBuffers}, the number of buffers allowed in the pool, combine to recreate the behavior of a linked list. 
+Our implementation does not have the lockless hit described in the paper, but does utilize its idea of an unchanging doubly linked list with \emph{O(1)} access.
+Each insertion or \emph{GetBuffer} (find victim) call is treated as an atomic action where a Spinlock is held until the function completes. 
+After every insertion or deletion, the ID of the buffer is used to access the array and either mark the buffer as the new head (insertion) or designate the buffer as unreachable (eviction).
+
 
 % ================================================
 \section{Benchmarking \& Results}
