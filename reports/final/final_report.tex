@@ -8,6 +8,9 @@
 % ================================
 
 \usepackage{graphicx}
+\usepackage{subcaption}
+
+\captionsetup{justification=raggedright}
 
 % for red coloring
 \def\bad#1{\textcolor{red}{#1}}
@@ -95,6 +98,68 @@ Postgres data is stored on the NVMe SSD for every test, and the WAL is stored on
 \subsection{Pgbench Workloads}
 
 We test over various workloads with different data localities and read/write ratios. For a skewed workload, we draw points from a Zipfian distribution with $\alpha=1.01$.
+
+\subsection{Results}
+
+\begin{figure}
+    \includegraphics[width=0.7\linewidth]{images/uni_latency_900.png}
+    \caption{Average query latency of uniform queries with a 900MB BP.}.
+\end{figure}
+\begin{figure}
+    \includegraphics[width=0.7\linewidth]{images/zipf_latency_900.png}
+    \caption{Average query latency of skewed Zipfian queries with a 900MB BP.}
+\end{figure}
+\begin{figure}
+    \includegraphics[width=0.7\linewidth]{images/uni_latency_1800.png}
+    \caption{Average query latency of uniform queries with a 1800MB BP.}
+\end{figure}
+\begin{figure}
+    \includegraphics[width=0.7\linewidth]{images/zipf_latency_1800.png}
+    \caption{Average query latency of skewed Zipfian queries with a 1800MB BP.}
+\end{figure}
+
+\begin{figure}
+    \includegraphics[width=0.7\linewidth]{images/uni_ratio_900.png}
+    \caption{Cache hit ratio of uniform queries with a 900MB BP.}.
+\end{figure}
+\begin{figure}
+    \includegraphics[width=0.7\linewidth]{images/zipf_ratio_900.png}
+    \caption{Cache hit ratio of skewed Zipfian queries with a 900MB BP.}
+\end{figure}
+\begin{figure}
+    \includegraphics[width=0.7\linewidth]{images/uni_ratio_1800.png}
+    \caption{Cache hit ratio of uniform queries with a 1800MB BP.}
+\end{figure}
+\begin{figure}
+    \includegraphics[width=0.7\linewidth]{images/zipf_ratio_1800.png}
+    \caption{Cache hit ratio of skewed Zipfian queries with a 1800MB BP.}
+\end{figure}
+
+\begin{figure}
+    \includegraphics[width=0.7\linewidth]{images/tput_scaling.png}
+    \caption{Throughput scaling as clients, threads, and memory increase}
+\end{figure}
+
+\begin{figure}
+    \includegraphics[width=0.7\linewidth]{images/tputvrw900.png}
+    \caption{Throughput as R/W ratio increases on skewed queries.}
+\end{figure}
+
+\begin{figure}
+    \includegraphics[width=0.7\linewidth]{images/tputvrw900uni.png}
+    \caption{Throughput as R/W ratio increases on uniform queries.}
+\end{figure}
+
+\begin{figure}
+    \includegraphics[width=0.7\linewidth]{images/scaling_uniform.png}
+    \caption{Performance scaling as only buffer size increases for uniform queries.}
+\end{figure}
+
+\begin{figure}
+    \includegraphics[width=0.7\linewidth]{images/scaling_skewed.png}
+    \caption{Performance scaling as only buffer size increases for skewed queries.}
+\end{figure}
+
 
 % =============================================================================
 \section{Conclusion}
