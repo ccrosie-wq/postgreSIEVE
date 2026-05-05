@@ -187,8 +187,8 @@ Ultimately, we were unable to determine the cause of the bottleneck in this test
 % =============================================================================
 \section{Conclusion}
 % =============================================================================
-
-We have implemented and evaluated SIEVE against Clock Sweep for various synthetic workloads and found that there is little difference in throughput and cache hit ratio. Our next steps are to additionally measure the write amplification of different eviction policies over different workloads and determine if SIEVE is able to pull ahead in any of those scenarios. We would also like to test synthetic workloads include range scans, which should perform worse according to~\cite{SIEVE}.
+Things to mention as part of the conclusion 1) SIEVE does seem to outperform CLOCK !on small buffers!, --> SIEVE shows promise, but ..
+2)Hypothetical bad scan performance (suggested by authors) would make furhter development for a DB/SQL workload provide little benefit.
 
 
 % reference
