@@ -34,7 +34,7 @@
 }
 
 \begin{abstract}
-    The buffer cache is a key data structure in the DBMS that helps reduce unnecessary disk I/Os. Eviction policies govern the removal of stale or infrequently accessed data, making room for new entries. Some of the most common eviction algorithms are Least Recently Used (LRU), Least Frequently Used (LFU), and First In First Out (FIFO). PostgreSQL uses CLOCK Sweep \textbf{figure \ref{fig:clksweepdiagram}}, a modification of the LRU algorithm designed to minimize the overhead of maintaining an ordered list of recently used pages. For our project, we implement SIEVE, an eviction policy originally designed as an LRU alternative for web caches into PostgreSQL. SIEVE is advantageous due to its lock-free design and its ability to be easily integrated into existing cache architectures. Whilst SIEVE was originally made for the web, there may be interesting use for it in database systems such as PostgreSQL. Our experiments benchmark SIEVE against other eviction policies using \textit{pgbench}. We find that SIEVE provides little (if any) improvement in terms of throughput and cache-hit ratio over the default buffer cache eviction policy on mixed and skewed workloads.
+    The buffer cache is a key data structure in the DBMS that helps reduce unnecessary disk I/Os. Eviction policies govern the removal of stale or infrequently accessed data, making room for new entries. Some of the most common eviction algorithms are Least Recently Used (LRU), Least Frequently Used (LFU), and First In First Out (FIFO). PostgreSQL uses CLOCK Sweep \cite{pgclock} (Figure~\ref{fig:clksweepdiagram}), a modification of the LRU algorithm designed to minimize the overhead of maintaining an ordered list of recently used pages. For our project, we implement SIEVE, an eviction policy originally designed as an LRU alternative for web caches \cite{SIEVE} into PostgreSQL. SIEVE is advantageous due to its lock-free design and its ability to be easily integrated into existing cache architectures. Whilst SIEVE was originally made for the web, there may be interesting use for it in database systems such as PostgreSQL. Our experiments benchmark SIEVE against other eviction policies using \textit{pgbench}. We find that SIEVE provides little improvement to the cache-hit ratio over the default buffer cache eviction policy on mixed and skewed workloads; however, minor latency improvements are observed.
 \end{abstract}
 
 \maketitle
@@ -56,8 +56,8 @@ The problem we explored is whether or not there are workloads for which SIEVE ou
 We make the following contributions:
 
 \begin{itemize}
-    \item We implemented a framework in PostgreSQL for implementing and switching between different buffer cache eviction policies at compile time.
-    \item We present results indicating that SIEVE does not offer any significant performance benefits over CLOCK in skewed and mixed workloads.
+    \item We implemented a framework in PostgreSQL for implementing and switching between different buffer cache eviction policies at compile time. The policies we implement in addition to CLOCk are SIEVE and LRU.
+    \item We present results indicating that SIEVE does not offer any significant performance benefits over CLOCK in skewed and mixed workloads for point queries.
 \end{itemize}
 
 
@@ -65,10 +65,13 @@ We make the following contributions:
 \section{Background}
 % =============================================================================
 For decades, cache eviction has been primarily dominated by primitive algorithms such as First In First Out (FIFO) and Least Recently Used (LRU). 
-More complex algorithms such as Adaptive Replacement Cache (ARC) typically have better results by exploiting different parts of the system to account for weaknesses in the aforementioned algorithms; however require the developer to implement hundreds of lines of code. 
-This persistent trade-off between ease of implementation and performance has been continuously discussed and researched in system research. As discussed in recent work \cite{SIEVE} SIEVE is a recent advancement in this space, originally designed for and evaluated against web cache workloads. 
+More complex algorithms such as Adaptive Replacement Cache (ARC) \cite{ARC} typically have better results by exploiting different parts of the system to account for weaknesses in the aforementioned algorithms; however require the developer to implement hundreds of lines of code. 
+This persistent trade-off between ease of implementation and performance has been continuously discussed and researched in system research. As discussed in recent work, \cite{SIEVE} SIEVE is a recent advancement in this space, originally designed for and evaluated against web cache workloads. 
 The authors categorize SIEVE as a cache eviction primitive similar to LRU or FIFO. Structurally, it is built upon a single FIFO queue and utilizes a "moving hand" pointer to track whether data has been recently accessed. 
 This hand scans from the tail toward the head of the queue, resetting the "visited" bit of objects it encounters. An object is only evicted if its visited bit is 0; otherwise, it is retained in its original position, effectively "sifting" the cache to preserve popular data. 
+
+\subsection{Simplicity and Performance}
+A primary advantage of SIEVE is its ease of integration; the authors report that it can be implemented within existing production environments using an average of fewer than twenty lines of code changes. This simplicity translates directly to high-performance scalability. In multi-threaded environments, SIEVE has demonstrated nearly double the throughput of optimized LRU implementations.
 
 \begin{figure}
     \includegraphics[width=0.4\linewidth]{images/Clock_Sweep_Image.png}
@@ -170,7 +173,7 @@ When measuring throughput over different read ratios in Figures \ref{fig:tputrws
     \label{fig:tputrwuni}
 \end{figure}
 
-Significantly, the transaction throughput of SIEVE in our experiments exhibited sublinear scaling in-line with CLOCK and LRU (Figure~\ref{fig:sublin}), and below the linear scaling observed in Figure 6 of~\cite{SIEVE}. We have tried to closely replicate the conditions under which the original scaling was seen, but have not seen the same performance characteristics. This could be due to a number of factors, but we believe that it is likely due to the different database environments these tests were run in. The datasets used in~\cite{SIEVE} are KV-cache traces from real-world systems replayed in a test environment. Postgres is likely to have significantly different indexing structures than a KV-cache. Along with the relational schema, we believe that these differences could hide any performance benefits observed in the context of the original paper. It is also possible that our synthetic benchmarks are not a comparable workload to the traces used in SIEVE. \bad{If we had more time}Given more time, we would try and set up this benchmark in a Postgres environment.
+Significantly, the transaction throughput of SIEVE in our experiments exhibited sublinear scaling in-line with CLOCK and LRU (Figure~\ref{fig:sublin}), and below the linear scaling observed in Figure 6 of~\cite{SIEVE}. We have tried to closely replicate the conditions under which the original scaling was seen, but have not seen the same performance characteristics. This could be due to a number of factors, but we believe that it is likely due to the different database environments these tests were run in. The datasets used in~\cite{SIEVE} are KV-cache traces from real-world systems replayed in a test environment. Postgres is likely to have significantly different indexing structures than a KV-cache. Along with the relational schema, we believe that these differences could hide any performance benefits observed in the context of the original paper. It is also possible that our synthetic benchmarks are not a comparable workload to the traces used in SIEVE. Given more time, we would try and set up this benchmark in a Postgres environment.
 
 \begin{figure}
     \includegraphics[width=0.7\linewidth]{images/tput_scaling.png}
