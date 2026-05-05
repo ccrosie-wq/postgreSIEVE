@@ -1,0 +1,74 @@
+\relax 
+\providecommand\hyper@newdestlabel[2]{}
+\providecommand\HyField@AuxAddToFields[1]{}
+\providecommand\HyField@AuxAddToCoFields[2]{}
+\citation{pgclock}
+\citation{SIEVE}
+\citation{SIEVE}
+\citation{ARC}
+\citation{SIEVE}
+\citation{clkswp}
+\citation{clkswp}
+\@writefile{toc}{\contentsline {section}{Abstract}{1}{section*.1}\protected@file@percent }
+\@writefile{toc}{\contentsline {section}{\numberline {1}Introduction}{1}{section.1}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {1.1}Motivation}{1}{subsection.1.1}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {1.2}Problem Statement}{1}{subsection.1.2}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {1.3}Contributions}{1}{subsection.1.3}\protected@file@percent }
+\@writefile{lof}{\contentsline {figure}{\numberline {1}{\ignorespaces Clock Sweep diagram. \citep  {clkswp}}}{1}{figure.caption.3}\protected@file@percent }
+\providecommand*\caption@xref[2]{\@setref\relax\@undefined{#1}}
+\newlabel{fig:clksweepdiagram}{{1}{1}{Clock Sweep diagram. \cite {clkswp}}{figure.caption.3}{}}
+\@writefile{toc}{\contentsline {section}{\numberline {2}Background}{1}{section.2}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {2.1}Simplicity and Performance}{1}{subsection.2.1}\protected@file@percent }
+\@writefile{toc}{\contentsline {section}{\numberline {3}Architecture}{2}{section.3}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {3.1}Buffer Policy Framework}{2}{subsection.3.1}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {3.2}Sieve Implementation}{2}{subsection.3.2}\protected@file@percent }
+\@writefile{toc}{\contentsline {section}{\numberline {4}Benchmarking \& Results}{2}{section.4}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {4.1}Hardware}{2}{subsection.4.1}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {4.2}Postgres Setup}{2}{subsection.4.2}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {4.3}Pgbench Workloads}{2}{subsection.4.3}\protected@file@percent }
+\@writefile{lof}{\contentsline {figure}{\numberline {2}{\ignorespaces Average query latency of uniform queries with a 900MB BP.}}{2}{figure.caption.4}\protected@file@percent }
+\newlabel{fig:unilatnine}{{2}{2}{Average query latency of uniform queries with a 900MB BP}{figure.caption.4}{}}
+\@writefile{lof}{\contentsline {figure}{\numberline {3}{\ignorespaces Average query latency of skewed Zipfian queries with a 900MB BP.}}{2}{figure.caption.5}\protected@file@percent }
+\newlabel{fig:ziplatnine}{{3}{2}{Average query latency of skewed Zipfian queries with a 900MB BP}{figure.caption.5}{}}
+\@writefile{lof}{\contentsline {figure}{\numberline {4}{\ignorespaces Average query latency of uniform queries with a 1800MB BP.}}{2}{figure.caption.6}\protected@file@percent }
+\newlabel{fig:unilateight}{{4}{2}{Average query latency of uniform queries with a 1800MB BP}{figure.caption.6}{}}
+\@writefile{toc}{\contentsline {subsection}{\numberline {4.4}Results}{2}{subsection.4.4}\protected@file@percent }
+\citation{ACE}
+\citation{SIEVE}
+\citation{SIEVE}
+\@writefile{lof}{\contentsline {figure}{\numberline {5}{\ignorespaces Average query latency of skewed Zipfian queries with a 1800MB BP.}}{3}{figure.caption.7}\protected@file@percent }
+\newlabel{fig:ziplateight}{{5}{3}{Average query latency of skewed Zipfian queries with a 1800MB BP}{figure.caption.7}{}}
+\@writefile{lof}{\contentsline {figure}{\numberline {6}{\ignorespaces Speedups of SIEVE and LRU vs Clock.}}{3}{figure.caption.8}\protected@file@percent }
+\newlabel{fig:percents}{{6}{3}{Speedups of SIEVE and LRU vs Clock}{figure.caption.8}{}}
+\@writefile{lof}{\contentsline {figure}{\numberline {7}{\ignorespaces Cache hit ratio of uniform queries with a 900MB BP.}}{3}{figure.caption.9}\protected@file@percent }
+\@writefile{lof}{\contentsline {figure}{\numberline {8}{\ignorespaces Cache hit ratio of skewed Zipfian queries with a 900MB BP.}}{3}{figure.caption.10}\protected@file@percent }
+\@writefile{lof}{\contentsline {figure}{\numberline {9}{\ignorespaces Cache hit ratio of uniform queries with a 1800MB BP.}}{3}{figure.caption.11}\protected@file@percent }
+\@writefile{lof}{\contentsline {figure}{\numberline {10}{\ignorespaces Cache hit ratio of skewed Zipfian queries with a 1800MB BP.}}{3}{figure.caption.12}\protected@file@percent }
+\citation{ACE}
+\citation{SIEVE}
+\bibstyle{ACM-Reference-Format}
+\bibdata{biblio}
+\bibcite{pgclock}{{1}{2005}{{Alvaro}}{{}}}
+\@writefile{lof}{\contentsline {figure}{\numberline {11}{\ignorespaces Throughput as R/W ratio increases on skewed queries.}}{4}{figure.caption.13}\protected@file@percent }
+\newlabel{fig:tputrwskew}{{11}{4}{Throughput as R/W ratio increases on skewed queries}{figure.caption.13}{}}
+\@writefile{lof}{\contentsline {figure}{\numberline {12}{\ignorespaces Throughput as R/W ratio increases on uniform queries.}}{4}{figure.caption.14}\protected@file@percent }
+\newlabel{fig:tputrwuni}{{12}{4}{Throughput as R/W ratio increases on uniform queries}{figure.caption.14}{}}
+\@writefile{lof}{\contentsline {figure}{\numberline {13}{\ignorespaces Throughput scaling as clients, threads, and memory increase. We use half as many threads as clients, and scale the bufferpool size proportionally with clients (starting at 900 MB, then 1800 MB, etc.). The workload is skewed, and the workload is mixed 1/1.}}{4}{figure.caption.15}\protected@file@percent }
+\newlabel{fig:sublin}{{13}{4}{Throughput scaling as clients, threads, and memory increase. We use half as many threads as clients, and scale the bufferpool size proportionally with clients (starting at 900 MB, then 1800 MB, etc.). The workload is skewed, and the workload is mixed 1/1}{figure.caption.15}{}}
+\@writefile{lof}{\contentsline {figure}{\numberline {14}{\ignorespaces Performance scaling as only buffer size increases for uniform queries on a mixed workload.}}{4}{figure.caption.16}\protected@file@percent }
+\@writefile{lof}{\contentsline {figure}{\numberline {15}{\ignorespaces Performance scaling as only buffer size increases for skewed queries on a mixed workload.}}{4}{figure.caption.17}\protected@file@percent }
+\@writefile{toc}{\contentsline {section}{\numberline {5}Conclusion}{4}{section.5}\protected@file@percent }
+\bibcite{clkswp}{{2}{2024}{{Gong}}{{}}}
+\bibcite{ARC}{{3}{2003}{{Megiddo and Modha}}{{}}}
+\bibcite{ACE}{{4}{2023}{{Papon and Athanassoulis}}{{}}}
+\bibcite{SIEVE}{{5}{2024}{{Zhang et~al\mbox  {.}}}{{}}}
+\newlabel{tocindent-1}{0pt}
+\newlabel{tocindent0}{0pt}
+\newlabel{tocindent1}{4.185pt}
+\newlabel{tocindent2}{10.34999pt}
+\newlabel{tocindent3}{0pt}
+\newlabel{tocindent4}{0pt}
+\newlabel{tocindent5}{0pt}
+\@writefile{toc}{\contentsline {section}{References}{5}{section*.19}\protected@file@percent }
+\newlabel{TotPages}{{5}{5}{}{page.5}{}}
+\gdef \@abspage@last{5}

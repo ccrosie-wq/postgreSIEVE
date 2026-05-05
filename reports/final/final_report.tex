@@ -74,8 +74,8 @@ This hand scans from the tail toward the head of the queue, resetting the "visit
 A primary advantage of SIEVE is its ease of integration; the authors report that it can be implemented within existing production environments using an average of fewer than twenty lines of code changes. This simplicity translates directly to high-performance scalability. In multi-threaded environments, SIEVE has demonstrated nearly double the throughput of optimized LRU implementations.
 
 \begin{figure}
-    \includegraphics[width=0.4\linewidth]{images/Clock_Sweep_Image.png}
-    \caption{Clock Sweep diagram.}.
+    \includegraphics[width=0.6\linewidth]{images/New_Clock_SWP.png}
+    \caption{Clock Sweep diagram. \cite{clkswp}}
     \label{fig:clksweepdiagram}
 \end{figure}
 
@@ -207,12 +207,7 @@ Ultimately, we were unable to determine the cause of the bottleneck in this test
 % =============================================================================
 \section{Conclusion}
 % =============================================================================
-We presented our implementation and findings on SIEVE, a cache eviction primitive within PostgreSQL. 
-We show from our results that SIEVE does show promise on small buffer sizes with better average latency on zipfian and uniform queries, however that advantage does diminish as the buffer size increases. 
-We also note that it is possible that our sythetic benchmarks are not comparable to the traces used in the orginal \cite{SIEVE}SIEVE paper which could \bad{be why our similar or super significant results.}
-The authors of SIEVE explicitly mention that SIEVE was not \bad{scan resisitant?} and would exhibit performance drops on non-scan workloads. 
-\bad{This is a gap we acknowlege during our experiments and would aim to explore scan heavy workloads in future developement/work}
-While we acknowledge this gap in our experimentation, serious concerns about scan performance could render future work into this concept an exercise in futility.
+We presented our implementation and findings on SIEVE, a cache eviction primitive within PostgreSQL. We show from our results that SIEVE shows promise on small buffer sizes with better average latency on zipfian and uniform queries, however that advantage does diminish as the buffer size increases. We also note that it is possible that our synthetic benchmarks are not comparable to the traces used in the original paper \cite{SIEVE}, which could explain why our results showed negligible improvement over CLOCK. The authors of SIEVE explicitly mention that SIEVE would exhibit performance drops on scan workloads. While we acknowledge this gap in our experimentation, future work could explore whether SIEVE's advantages at small buffer sizes generalize to other workloads, and whether a scan-resistant variant of SIEVE could close the performance gap observed in write-heavy and uniform access patterns within PostgreSQL.
 
 % reference
 {
