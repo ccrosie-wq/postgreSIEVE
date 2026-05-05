@@ -1,7 +1,6 @@
-
 \documentclass[sigconf]{acmart}
-% ===== Don't touch this :) ======
 \settopmatter{printacmref=false} % Removes citation information below abstract
+% ===== Don't touch this :) ======
 \renewcommand\footnotetextcopyrightpermission[1]{} % removes footnote with conference information in first column
 \renewcommand\footnotetextauthorsaddresses[1]{}
 \pagestyle{plain} % removes running headers
@@ -39,15 +38,6 @@
 \end{abstract}
 
 \maketitle
-
-% =============================================================================
-\section{Fake Results}
-% =============================================================================
-Our results show that in the SQL use case we tested, SIEVE does show signs of slightly improved performance for very small buffers, but this difference in performance disappears as buffer size increases.
-Figure X shows these results most clearly, where SIEVE outperforms CLOCK in latency across all R/W rations for the 900MB bufferpool. 
-Interestingly, despite the higher latency, CLOCK seems to maintain a slight edge in cache hit rations on all buffer sizes with write heavy workloads.
-When comparing throughput and read ratio, we see very little variance in performance between the policies across read ratios, however we do see that LRU falls behind the others for uniform queries.
-Significantly, our results show that transaction throughput of SIEVE scales sublinearly in-line with CLOCK and LRU, and below the linear sclaing observed by the SIEVE authors.
 
 % =============================================================================
 \section{Introduction}
@@ -93,8 +83,10 @@ To facilitate the testing of several eviction policies in a common 'environment'
 Our SIEVE implementation was designed with static arrays to minimize the overhead of memory reallocation. Two static arrays sized to \emph{NBuffers}, the number of buffers allowed in the pool, combine to recreate the behavior of a linked list. Each insertion or \emph{GetBuffer} (find victim) call is treated as an atomic action where a Spinlock is held until the function completes. After every insertion or deletion, the ID of the buffer is used to access the array and either mark the buffer as the new head (insertion) or designate the buffer as unreachable (eviction).
 
 % ================================================
-\section{Benchmarking}
+\section{Benchmarking \& Results}
 % =============================================================================
+
+We have made substantial changes to our benchmarking setup since the midway report. These changes will be pointed out in the following subsections. We would also like to mention that the results from our midway report are entirely invalid because we had not been properly switching cache eviction policies due to a miscommunication. This has been resolved, and detailed information on how to test this yourself can be found in our codebase.
 
 \subsection{Hardware}
 
@@ -102,30 +94,38 @@ We perform all of our evaluations on a system running Linux Mint (a Debian fork)
 
 \subsection{Postgres Setup}
 
-Postgres data is stored on the NVMe SSD for every test, and the WAL is stored on the SATA SSD. Benchmarks use the standard pgbench tables with auto-vacuuming disabled. The tables are vacuumed manually after each test to ensure a clean database for the next test.
+Postgres data is stored on the NVMe SSD for every test, and the WAL is stored on the SATA SSD. In the midterm, the only device was the SATA SSD. Benchmarks use the standard pgbench tables with a scale factor of 1000. In our midterm results, we had erroneously used a scale factor of 1 when generating the tables. Auto-vacuuming is disabled, and the tables are vacuumed manually after each test to ensure a clean database for the next test. In our midterm results, auto-vacuuming had been enabled.
 
 \subsection{Pgbench Workloads}
 
-We test over various workloads with different data localities and read/write ratios. For a skewed workload, we draw points from a Zipfian distribution with $\alpha=1.01$.
+We test over various workloads with different data localities and read/write ratios. For a skewed workload, we draw points from a Zipfian distribution with $\alpha=1.01$. This is a lower parameter than we used in the midterm to get a slightly more dramatic skew.
 
 \subsection{Results}
+
+Our results show that in the SQL use case we tested, SIEVE does show signs of slightly improved performance for very small buffers, but this difference in performance disappears as buffer size increases.
 
 \begin{figure}
     \includegraphics[width=0.7\linewidth]{images/uni_latency_900.png}
     \caption{Average query latency of uniform queries with a 900MB BP.}.
+    \label{fig:unilatnine}
 \end{figure}
 \begin{figure}
     \includegraphics[width=0.7\linewidth]{images/zipf_latency_900.png}
     \caption{Average query latency of skewed Zipfian queries with a 900MB BP.}
+    \label{fig:ziplatnine}
 \end{figure}
 \begin{figure}
     \includegraphics[width=0.7\linewidth]{images/uni_latency_1800.png}
     \caption{Average query latency of uniform queries with a 1800MB BP.}
+    \label{fig:unilateight}
 \end{figure}
 \begin{figure}
     \includegraphics[width=0.7\linewidth]{images/zipf_latency_1800.png}
     \caption{Average query latency of skewed Zipfian queries with a 1800MB BP.}
+    \label{fig:ziplateight}
 \end{figure}
+
+Figures \ref{fig:unilatnine} and \ref{fig:ziplatnine} show these results most clearly, where SIEVE outperforms CLOCK in latency across all R/W rations for the 900MB bufferpool. Despite the higher latency, CLOCK seems to maintain a slight edge in cache hit rations on all buffer sizes with write heavy workloads. 
 
 \begin{figure}
     \includegraphics[width=0.7\linewidth]{images/uni_ratio_900.png}
@@ -144,29 +144,43 @@ We test over various workloads with different data localities and read/write rat
     \caption{Cache hit ratio of skewed Zipfian queries with a 1800MB BP.}
 \end{figure}
 
-\begin{figure}
-    \includegraphics[width=0.7\linewidth]{images/tput_scaling.png}
-    \caption{Throughput scaling as clients, threads, and memory increase}
-\end{figure}
+When measuring throughput over different read ratios in Figures \ref{fig:tputrwskew} and \ref{fig:tputrwuni}, we see little variance in performance between the policies; however, we do see that LRU falls behind the others for uniform queries. This behavior falls in line with Figure 10C of~\cite{ACE} which is the result we were trying to reproduce.
 
 \begin{figure}
     \includegraphics[width=0.7\linewidth]{images/tputvrw900.png}
     \caption{Throughput as R/W ratio increases on skewed queries.}
+    \label{fig:tputrwskew}
 \end{figure}
 
 \begin{figure}
     \includegraphics[width=0.7\linewidth]{images/tputvrw900uni.png}
     \caption{Throughput as R/W ratio increases on uniform queries.}
+    \label{fig:tputrwuni}
 \end{figure}
+
+Significantly, the transaction throughput of SIEVE in our experiments exhibited sublinear scaling in-line with CLOCK and LRU (Figure~\ref{fig:sublin}), and below the linear scaling observed in Figure 6 of~\cite{SIEVE}. We have tried to closely replicate the conditions under which the original scaling was seen, but have not seen the same performance characteristics. This could be due to a number of factors, but we believe that it is likely due to the different database environments these tests were run in. The datasets used in~\cite{SIEVE} are KV-cache traces from real-world systems replayed in a test environment. Postgres is likely to have significantly different indexing structures than a KV-cache. Along with the relational schema, we believe that these differences could hide any performance benefits observed in the context of the original paper. It is also possible that our synthetic benchmarks are not comparable workload to the traces used in SIEVE. If we had more time, we would try and set up this benchmark in a Postgres environment.
+
+\begin{figure}
+    \includegraphics[width=0.7\linewidth]{images/tput_scaling.png}
+    \caption{Throughput scaling as clients, threads, and memory increase. We use half as many threads as clients, and scale the bufferpool size proportionally with clients (starting at 900 MB, then 1800 MB, etc.). The workload is skewed, and the workload is mixed 1/1.}
+    \label{fig:sublin}
+\end{figure}
+
+Finally, we observed in our testing setup that throughput hit a wall on when the size of the bufferpool hit about \%20 of the total data size. We expected to see something more similar to the graph in Figure 10E of~\cite{ACE}, in which the workload latency would rapidly decrease as bufferpool size increased.
+
+To investigate, we verified that cache hit ratio was increasing, and performed the same experiment with a read-heavy workload. Again, we saw the performance gains hit a wall. As we increased the number of threads, the throughput increased, but we did not see a change in the shape of the graph.
+
+Ultimately, we were unable to determine the cause of the bottleneck in this test. As a final effort, we disabled file syncing in postgres to try and remove all disk accesses, but this did not change the shape of our graph.
+
 
 \begin{figure}
     \includegraphics[width=0.7\linewidth]{images/scaling_uniform.png}
-    \caption{Performance scaling as only buffer size increases for uniform queries.}
+    \caption{Performance scaling as only buffer size increases for uniform queries on a mixed workload.}
 \end{figure}
 
 \begin{figure}
     \includegraphics[width=0.7\linewidth]{images/scaling_skewed.png}
-    \caption{Performance scaling as only buffer size increases for skewed queries.}
+    \caption{Performance scaling as only buffer size increases for skewed queries on a mixed workload.}
 \end{figure}
 
 
