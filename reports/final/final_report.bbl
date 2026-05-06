@@ -8,20 +8,21 @@
 %%% NOTE TO THE USER: you can override these defaults by providing
 %%% customized versions of any of these macros before the \bibliography
 %%% command.  Each of them MUST provide its own final punctuation,
-%%% except for \shownote{} and \showURL{}.  The latter two
+%%% except for \shownote{}, \showDOI{}, and \showURL{}.  The latter two
 %%% do not use final punctuation, in order to avoid confusing it with
 %%% the Web address.
 %%%
 %%% To suppress output of a particular field, define its macro to expand
 %%% to an empty string, or better, \unskip, like this:
 %%%
-%%% \newcommand{\showURL}[1]{\unskip}   % LaTeX syntax
+%%% \newcommand{\showDOI}[1]{\unskip}   % LaTeX syntax
 %%%
-%%% \def \showURL #1{\unskip}           % plain TeX syntax
+%%% \def \showDOI #1{\unskip}           % plain TeX syntax
 %%%
 %%% ====================================================================
 
 \ifx \showCODEN    \undefined \def \showCODEN     #1{\unskip}     \fi
+\ifx \showDOI      \undefined \def \showDOI       #1{#1}\fi
 \ifx \showISBNx    \undefined \def \showISBNx     #1{\unskip}     \fi
 \ifx \showISBNxiii \undefined \def \showISBNxiii  #1{\unskip}     \fi
 \ifx \showISSN     \undefined \def \showISSN      #1{\unskip}     \fi
@@ -41,6 +42,7 @@
 \bibfield{author}{\bibinfo{person}{Tom Alvaro}.} \bibinfo{year}{2005}\natexlab{}.
 \newblock \bibinfo{title}{Release 8.1}.
 \newblock
+\newblock
 \urldef\tempurl%
 \url{https://www.postgresql.org/docs/9.1/release-8-1.html}
 \showURL{%
@@ -51,6 +53,7 @@
         {clkswp}
 \bibfield{author}{\bibinfo{person}{Steven Gong}.} \bibinfo{year}{2024}\natexlab{}.
 \newblock \bibinfo{title}{Clock Policy}.
+\newblock
 \newblock
 \urldef\tempurl%
 \url{https://stevengong.co/notes/Clock-Policy}
@@ -74,7 +77,9 @@
 \bibfield{author}{\bibinfo{person}{Tarikul~Islam Papon} {and} \bibinfo{person}{Manos Athanassoulis}.} \bibinfo{year}{2023}\natexlab{}.
 \newblock \showarticletitle{ACEing the Bufferpool Management Paradigm for Modern Storage Devices}. In \bibinfo{booktitle}{\emph{2023 IEEE 39th International Conference on Data Engineering (ICDE)}}. \bibinfo{pages}{1326--1339}.
 \newblock
-\href{https://doi.org/10.1109/ICDE55515.2023.00106}{doi:\nolinkurl{10.1109/ICDE55515.2023.00106}}
+\urldef\tempurl%
+\url{https://doi.org/10.1109/ICDE55515.2023.00106}
+\showDOI{\tempurl}
 
 
 \bibitem[Zhang et~al\mbox{.}(2024)]%
