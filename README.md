@@ -26,6 +26,16 @@ To change the policy, you must:
 
 See the `benchmark/README.md` file. The contents of the benchmark folder are used to run all experiments.
 
+## Unit Tests
+
+Unit tests for our LRU and SIEVE implementations can be found in the sandbox directory. Navigate their and make the tests:
+
+```bash
+$ cd sandbox
+$ make
+```
+
+The executables `lru_test` and `sieve_test` are now generated and can be run independently of the database.
 
 PostgreSQL Database Management System
 =====================================
